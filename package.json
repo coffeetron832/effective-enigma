@@ -1,0 +1,19 @@
+{
+  "name": "mascii",
+  "version": "1.0.0",
+  "description": "ASCII terminal music player",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "mascii": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "chalk": "^5.3.0",
+    "music-metadata": "^10.0.0",
+    "play-sound": "^1.1.6"
+  }
+}
