@@ -3,9 +3,9 @@ import path from "path";
 
 export function createCommands({ ui, player }) {
   const input = ui.getInput();
-
   let isLocked = false;
 
+  // Redirige los logs generales a la caja de información del archivo (File Info / Log)
   function log(message = "") {
     ui.appendLog(message);
   }
@@ -19,58 +19,32 @@ export function createCommands({ ui, player }) {
     const trimmedPath = String(targetPath || "").trim();
 
     if (!trimmedPath) {
-      log(`
-{red-fg}Missing path{/red-fg}
-
-Example:
-load ./music
-      `);
+      log(`{red-fg}Missing path{/red-fg}\nUse: load <path>`);
       return;
     }
 
     const resolved = path.resolve(trimmedPath);
 
     if (!fs.existsSync(resolved)) {
-      log(`
-{red-fg}Path not found{/red-fg}
-
-${resolved}
-      `);
+      log(`{red-fg}Path not found{/red-fg}\n${resolved}`);
       return;
     }
 
     const musicDir = path.resolve("./music");
 
     if (!fs.existsSync(musicDir)) {
-      fs.mkdirSync(musicDir, {
-        recursive: true
-      });
+      fs.mkdirSync(musicDir, { recursive: true });
     }
 
-    const supported = new Set([
-      ".mp3",
-      ".wav",
-      ".ogg",
-      ".flac",
-      ".m4a",
-      ".aac"
-    ]);
-
+    const supported = new Set([".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"]);
     let copied = 0;
 
     function copyFile(filePath) {
       const ext = path.extname(filePath).toLowerCase();
-
-      if (!supported.has(ext)) {
-        return;
-      }
+      if (!supported.has(ext)) return;
 
       const filename = path.basename(filePath);
-
-      const destination = path.join(
-        musicDir,
-        filename
-      );
+      const destination = path.join(musicDir, filename);
 
       try {
         fs.copyFileSync(filePath, destination);
@@ -84,7 +58,6 @@ ${resolved}
 
     if (stats.isDirectory()) {
       const files = fs.readdirSync(resolved);
-
       for (const file of files) {
         copyFile(path.join(resolved, file));
       }
@@ -92,26 +65,29 @@ ${resolved}
       copyFile(resolved);
     }
 
-    log(`
-{green-fg}Import Complete{/green-fg}
+    log(`{green-fg}Imported ${copied} file(s){/green-fg} to ./music`);
+    
+    // Si el reproductor tiene un método para recargar las pistas locales, lo llamamos aquí
+    if (typeof player.loadTracks === "function") {
+      player.loadTracks();
+      updatePlaylistUI();
+    }
+  }
 
-Copied:
-${copied} audio file(s)
-
-Destination:
-./music
-    `);
+  // Sincroniza visualmente la lista de reproducción en la interfaz
+  function updatePlaylistUI() {
+    if (typeof player.getTracks === "function" && typeof player.getCurrentIndex === "function") {
+      const tracks = player.getTracks();
+      const currentIndex = player.getCurrentIndex();
+      ui.setPlaylist(tracks, currentIndex);
+    }
   }
 
   function runCommand(raw = "") {
-    if (isLocked) {
-      return;
-    }
-
+    if (isLocked) return;
     isLocked = true;
 
     const trimmed = String(raw || "").trim();
-
     clearInput();
 
     if (!trimmed) {
@@ -122,30 +98,28 @@ Destination:
     }
 
     const parts = trimmed.split(/\s+/);
-
     const command = parts[0].toLowerCase();
-
     const args = parts.slice(1);
 
     switch (command) {
       case "play":
       case "pause":
       case "toggle":
-        player.toggle();
+        if (typeof player.toggle === "function") player.toggle();
         break;
 
       case "next":
       case "n":
-        player.next();
+        if (typeof player.next === "function") player.next();
         break;
 
       case "prev":
       case "p":
-        player.prev();
+        if (typeof player.prev === "function") player.prev();
         break;
 
       case "stop":
-        player.stop();
+        if (typeof player.stop === "function") player.stop();
         break;
 
       case "load":
@@ -153,27 +127,8 @@ Destination:
         break;
 
       case "help":
-        log(`
-{green-fg}MASCII COMMANDS{/green-fg}
-
-Playback:
-play
-pause
-next
-prev
-stop
-
-Import:
-load <path>
-
-Example:
-load ./downloads
-
-System:
-help
-clear
-quit
-        `);
+      case "h":
+        log(`{green-fg}HELP:{/green-fg} play, pause, next, prev, stop, load <path>, clear, quit`);
         break;
 
       case "clear":
@@ -189,14 +144,12 @@ quit
         return;
 
       default:
-        log(`
-{red-fg}Unknown command:{/red-fg}
-
-${command}
-        `);
+        log(`{red-fg}Unknown:{/red-fg} ${command}`);
     }
 
+    // El timeout ahora se encarga de pintar la UI una vez que los punteros asíncronos cambiaron
     setTimeout(() => {
+      updatePlaylistUI();
       isLocked = false;
       clearInput();
       ui.focusInput();
@@ -204,13 +157,15 @@ ${command}
     }, 60);
   }
 
+  // Remueve listeners previos para evitar fugas de memoria al reinicializar el módulo
   input.removeAllListeners("submit");
 
   input.on("submit", value => {
     runCommand(value);
   });
 
+  // Inicialización de la vista
   clearInput();
-
   ui.focusInput();
+  updatePlaylistUI();
 }
