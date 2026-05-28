@@ -1,6 +1,8 @@
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
+import * as mm from "music-metadata"; // Extractor de metadatos
+import sharp from "sharp"; // Procesador de imágenes nativo eficiente
 
 export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let playlist = [...initialPlaylist];
@@ -52,7 +54,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   function cleanup() {
     if (audioProcess) {
       try {
-        // SOLUCIÓN: Le marcamos directamente al objeto del proceso que fue cancelado a mano
         audioProcess.isKilledManually = true; 
         audioProcess.kill("SIGTERM");
       } catch {}
@@ -60,6 +61,83 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     }
     playing = false;
     startedAt = 0;
+  }
+
+  // Generador de portadas de alta definición TrueColor (RGB de 24 bits)
+  async function updateAlbumArtMetadata(track, ui) {
+    const defaultArt = [
+      "      .:::::.",
+      "    .:::::::::.",
+      "   :::::::::::::",
+      "   ░░░░░░░░░░░░░",
+      " ─────────────────",
+      "  ───────────────",
+      "   ─────────────"
+    ].join("\n");
+
+    let albumName = "Retro Terminal Hits";
+    let year = "2026";
+
+    try {
+      const metadata = await mm.parseFile(track.path);
+      
+      if (metadata.common.album) albumName = metadata.common.album;
+      if (metadata.common.year) year = String(metadata.common.year);
+      if (metadata.common.artist) track.artist = metadata.common.artist;
+
+      const picture = metadata.common.picture && metadata.common.picture[0];
+
+      if (picture && picture.data) {
+        // Obtenemos las dimensiones de la caja visual del layout
+        const uiSize = ui.getSize ? ui.getSize() : { width: 80, height: 24 };
+        
+        // Ajuste de escala para que conserve proporción cuadrada en celdas de terminal
+        const targetWidth = Math.max(Math.floor(uiSize.width * 0.28), 24);
+        // Multiplicamos por 2 ya que cada fila de caracteres pintará 2 píxeles verticales
+        const targetHeight = Math.max(Math.floor(uiSize.height - 18), 10) * 2;
+
+        // Extraemos el buffer en canales RGBA puros sin compresión intermediaria
+        const { data, info } = await sharp(picture.data)
+          .resize(targetWidth, targetHeight, { fit: "fill" })
+          .ensureAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+
+        let asciiResult = "";
+        const width = info.width;
+        const height = info.height;
+
+        // Agrupamos filas de dos en dos saltando de manera vertical
+        for (let y = 0; y < height; y += 2) {
+          for (let x = 0; x < width; x++) {
+            // Píxel de la mitad superior de la celda
+            const idxTop = (y * width + x) * 4;
+            const rTop = data[idxTop];
+            const gTop = data[idxTop + 1];
+            const bTop = data[idxTop + 2];
+
+            // Píxel de la mitad inferior de la celda
+            const hasBottom = (y + 1) < height;
+            const idxBot = hasBottom ? ((y + 1) * width + x) * 4 : idxTop;
+            const rBot = data[idxBot];
+            const gBot = data[idxBot + 1];
+            const bBot = data[idxBot + 2];
+
+            // Secuencia ANSI TrueColor escape:
+            // \x1b[38;2;R;G;Bm -> Color del texto (Frente: medio bloque inferior '▄')
+            // \x1b[48;2;R;G;Bm -> Color del fondo (Detrás: rellena la mitad superior)
+            asciiResult += `\x1b[38;2;${rBot};${gBot};${bBot};48;2;${rTop};${gTop};${bTop}m▄\x1b[0m`;
+          }
+          asciiResult += "\n";
+        }
+
+        ui.setAlbumArt(asciiResult, albumName, year);
+      } else {
+        ui.setAlbumArt(defaultArt, albumName, year);
+      }
+    } catch {
+      ui.setAlbumArt(defaultArt, albumName, year);
+    }
   }
 
   function play() {
@@ -73,7 +151,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     cleanup();
 
     try {
-      // Guardamos la referencia local del proceso que vamos a lanzar ahora
       const currentProcess = spawn(
         "mpv",
         [
@@ -101,13 +178,10 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       });
 
       currentProcess.on("exit", () => {
-        // Si el proceso que acaba de morir es el actual y NO fue matado a mano
         if (currentProcess === audioProcess) {
           audioProcess = null;
         }
 
-        // CORRECCIÓN: Comprobamos la propiedad interna de ESTE proceso específico.
-        // Si tiene 'isKilledManually', ignoramos su cierre por completo.
         if (playing && !currentProcess.isKilledManually) {
           next();
         } else {
@@ -126,19 +200,10 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       startedAt = Date.now();
 
       ui.setFileInfo("MPEG Layer 3", "320kbps");
-      
-      const sampleArt = [
-        "      .:::::.",
-        "    .:::::::::.",
-        "   :::::::::::::",
-        "   ░░░░░░░░░░░░░",
-        " ─────────────────",
-        "  ───────────────",
-        "   ─────────────"
-      ].join("\n");
-      
-      ui.setAlbumArt(sampleArt, "Retro Terminal Hits", "2026");
       ui.setPlaylist(playlist, index);
+
+      // Renderización asíncrona de la carátula RGB a color real
+      updateAlbumArtMetadata(track, ui);
 
     } catch (error) {
       playing = false;
