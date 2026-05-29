@@ -1,8 +1,8 @@
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
 import fs from "fs";
 import path from "path";
-import * as mm from "music-metadata"; // Extractor de metadatos
-import sharp from "sharp"; // Procesador de imágenes nativo eficiente
+import * as mm from "music-metadata";
+import sharp from "sharp";
 
 export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let playlist = [...initialPlaylist];
@@ -16,14 +16,17 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let shuffleState = false;
   let eqMode = "ROCK";
 
+  let audioWaveform = new Array(30).fill(0); 
+  
+  // Definimos la ruta para la tubería FIFO temporal
+  const fifoPath = path.resolve("./music_wave_fifo");
+
   loadTracks();
 
   function loadTracks() {
     const musicDir = path.resolve("./music");
     if (!fs.existsSync(musicDir)) {
-      try {
-        fs.mkdirSync(musicDir, { recursive: true });
-      } catch {}
+      try { fs.mkdirSync(musicDir, { recursive: true }); } catch {}
       return;
     }
 
@@ -51,6 +54,19 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     return playlist[index];
   }
 
+  function setupFifo() {
+    // Si la tubería FIFO ya existe, la borramos para evitar bloqueos de buffer residuales
+    if (fs.existsSync(fifoPath)) {
+      try { fs.unlinkSync(fifoPath); } catch {}
+    }
+    // Creamos una tubería con nombre nativa en Linux usando mkfifo
+    try {
+      execSync(`mkfifo "${fifoPath}"`);
+    } catch (err) {
+      ui.appendLog(`{red-fg}FIFO Error:{/red-fg} ${err.message}`);
+    }
+  }
+
   function cleanup() {
     if (audioProcess) {
       try {
@@ -61,9 +77,15 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     }
     playing = false;
     startedAt = 0;
+    audioWaveform.fill(0);
+    if (ui.setWaveform) ui.setWaveform(audioWaveform);
+
+    // Borramos el archivo FIFO temporal
+    if (fs.existsSync(fifoPath)) {
+      try { fs.unlinkSync(fifoPath); } catch {}
+    }
   }
 
-  // Generador de portadas de alta definición TrueColor (RGB de 24 bits)
   async function updateAlbumArtMetadata(track, ui) {
     const defaultArt = [
       "      .:::::.",
@@ -80,7 +102,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
     try {
       const metadata = await mm.parseFile(track.path);
-      
       if (metadata.common.album) albumName = metadata.common.album;
       if (metadata.common.year) year = String(metadata.common.year);
       if (metadata.common.artist) track.artist = metadata.common.artist;
@@ -88,15 +109,10 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       const picture = metadata.common.picture && metadata.common.picture[0];
 
       if (picture && picture.data) {
-        // Obtenemos las dimensiones de la caja visual del layout
         const uiSize = ui.getSize ? ui.getSize() : { width: 80, height: 24 };
-        
-        // Ajuste de escala para que conserve proporción cuadrada en celdas de terminal
         const targetWidth = Math.max(Math.floor(uiSize.width * 0.28), 24);
-        // Multiplicamos por 2 ya que cada fila de caracteres pintará 2 píxeles verticales
         const targetHeight = Math.max(Math.floor(uiSize.height - 18), 10) * 2;
 
-        // Extraemos el buffer en canales RGBA puros sin compresión intermediaria
         const { data, info } = await sharp(picture.data)
           .resize(targetWidth, targetHeight, { fit: "fill" })
           .ensureAlpha()
@@ -107,30 +123,19 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
         const width = info.width;
         const height = info.height;
 
-        // Agrupamos filas de dos en dos saltando de manera vertical
         for (let y = 0; y < height; y += 2) {
           for (let x = 0; x < width; x++) {
-            // Píxel de la mitad superior de la celda
             const idxTop = (y * width + x) * 4;
-            const rTop = data[idxTop];
-            const gTop = data[idxTop + 1];
-            const bTop = data[idxTop + 2];
+            const rTop = data[idxTop]; const gTop = data[idxTop + 1]; const bTop = data[idxTop + 2];
 
-            // Píxel de la mitad inferior de la celda
             const hasBottom = (y + 1) < height;
             const idxBot = hasBottom ? ((y + 1) * width + x) * 4 : idxTop;
-            const rBot = data[idxBot];
-            const gBot = data[idxBot + 1];
-            const bBot = data[idxBot + 2];
+            const rBot = data[idxBot]; const gBot = data[idxBot + 1]; const bBot = data[idxBot + 2];
 
-            // Secuencia ANSI TrueColor escape:
-            // \x1b[38;2;R;G;Bm -> Color del texto (Frente: medio bloque inferior '▄')
-            // \x1b[48;2;R;G;Bm -> Color del fondo (Detrás: rellena la mitad superior)
             asciiResult += `\x1b[38;2;${rBot};${gBot};${bBot};48;2;${rTop};${gTop};${bTop}m▄\x1b[0m`;
           }
           asciiResult += "\n";
         }
-
         ui.setAlbumArt(asciiResult, albumName, year);
       } else {
         ui.setAlbumArt(defaultArt, albumName, year);
@@ -142,47 +147,88 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
   function play() {
     const track = getTrack();
-
     if (!track) {
       ui.appendLog("{red-fg}No music found.{/red-fg} Add files to ./music");
       return;
     }
 
     cleanup();
+    setupFifo(); // Preparamos el puente FIFO
 
     try {
+      playing = true;
+      startedAt = Date.now();
+
+      // Lanzamos mpv apuntando la salida de audio hacia el archivo FIFO en lugar de fd://3
       const currentProcess = spawn(
         "mpv",
         [
           "--no-video",
           "--no-terminal",
-          "--audio-display=no",
           "--keep-open=no",
+          `--audio-to-file=${fifoPath}`,
+          "--oformat=s16le",  
+          "--oaudio-channels=mono",
+          "--oaudio-speed=44100",
           track.path
         ],
         {
           detached: false,
-          stdio: ["ignore", "ignore", "pipe"]
+          stdio: ["ignore", "ignore", "pipe"] 
         }
       );
 
       audioProcess = currentProcess;
 
+      // Abrimos el flujo de lectura asíncrono sobre el archivo FIFO desde Node.js
+      const audioStream = fs.createReadStream(fifoPath);
+
+      audioStream.on("data", chunk => {
+        if (!playing) return;
+        
+        try {
+          const samples = new Int16Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 2);
+          if (samples.length === 0) return;
+
+          const numBars = audioWaveform.length;
+          const samplesPerBar = Math.floor(samples.length / numBars) || 1;
+
+          for (let i = 0; i < numBars; i++) {
+            let sumSquares = 0;
+            const start = i * samplesPerBar;
+            const end = Math.min(start + samplesPerBar, samples.length);
+
+            for (let j = start; j < end; j++) {
+              sumSquares += samples[j] * samples[j];
+            }
+
+            const rms = Math.sqrt(sumSquares / (end - start || 1));
+            const normalizedHeight = Math.min(Math.floor((rms / 4000) * 8), 8);
+            
+            audioWaveform[i] = Math.max(normalizedHeight, audioWaveform[i] - 1);
+          }
+
+          if (typeof ui.setWaveform === "function") {
+            ui.setWaveform(audioWaveform);
+          }
+        } catch (err) {}
+      });
+
       currentProcess.stderr.on("data", data => {
         const text = String(data || "").trim();
-        if (!text) return;
-
         if (text.includes("error") || text.includes("fatal")) {
           ui.appendLog(`{red-fg}mpv error:{/red-fg} ${text.slice(0, 30)}`);
         }
       });
 
-      currentProcess.on("exit", () => {
+      currentProcess.on("exit", (code) => {
+        const wasKilled = currentProcess.isKilledManually;
+
         if (currentProcess === audioProcess) {
           audioProcess = null;
         }
 
-        if (playing && !currentProcess.isKilledManually) {
+        if (playing && !wasKilled) {
           next();
         } else {
           ui.render();
@@ -190,19 +236,12 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       });
 
       currentProcess.on("error", error => {
-        if (currentProcess === audioProcess) {
-          playing = false;
-        }
-        ui.appendLog(`{red-fg}Failed:{/red-fg} ${error.message}`);
+        playing = false;
+        ui.appendLog(`{red-fg}Failed to launch mpv:{/red-fg} ${error.message}`);
       });
-
-      playing = true;
-      startedAt = Date.now();
 
       ui.setFileInfo("MPEG Layer 3", "320kbps");
       ui.setPlaylist(playlist, index);
-
-      // Renderización asíncrona de la carátula RGB a color real
       updateAlbumArtMetadata(track, ui);
 
     } catch (error) {
@@ -218,11 +257,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   }
 
   function toggle() {
-    if (playing) {
-      stop();
-    } else {
-      play();
-    }
+    if (playing) { stop(); } else { play(); }
   }
 
   function next() {
@@ -241,48 +276,22 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     play();
   }
 
-  function isPlaying() {
-    return playing;
-  }
-
-  function getCurrentIndex() {
-    return index;
-  }
-
-  function getTracks() {
-    return playlist;
-  }
-
-  function getCurrentTime() {
-    if (!playing || !startedAt) return 0;
-    return Math.floor((Date.now() - startedAt) / 1000);
-  }
-
-  function getDuration() {
-    return 180; 
-  }
-
+  function isPlaying() { return playing; }
+  function getCurrentIndex() { return index; }
+  function getTracks() { return playlist; }
   function getVolume() { return currentVolume; }
   function isLoop() { return loopState; }
   function isShuffle() { return shuffleState; }
   function getEQ() { return eqMode; }
+  function getCurrentTime() {
+    if (!playing || !startedAt) return 0;
+    return Math.floor((Date.now() - startedAt) / 1000);
+  }
+  function getDuration() { return 180; }
 
   return {
-    play,
-    stop,
-    toggle,
-    next,
-    prev,
-    isPlaying,
-    getTrack,
-    getCurrentIndex,
-    getTracks,
-    getCurrentTime,
-    getDuration,
-    loadTracks,
-    getVolume,
-    isLoop,
-    isShuffle,
-    getEQ
+    play, stop, toggle, next, prev, isPlaying, getTrack,
+    getCurrentIndex, getTracks, getCurrentTime, getDuration,
+    loadTracks, getVolume, isLoop, isShuffle, getEQ
   };
 }

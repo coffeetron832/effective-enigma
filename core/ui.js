@@ -212,7 +212,6 @@ export function createUI() {
     screen.render();
   }
 
-  // Permite actualizar dinámicamente el arte en ASCII y la etiqueta del recuadro
   function setAlbumArt(asciiArt, albumName, year) {
     albumArtBox.setContent(asciiArt);
     albumArtBox.setLabel(` ALBUM ART: [${albumName} - ${year}] `);
@@ -221,6 +220,24 @@ export function createUI() {
 
   function setVisualizer(asciiSpectrogram) {
     visualizerBox.setContent(asciiSpectrogram);
+    screen.render();
+  }
+
+  // CORRECCIÓN CLAVE: Inyección real de datos de ondas PCM mapeada en barras verticales ASCII
+  function setWaveform(waveData) {
+    const barChars = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    
+    // Convertimos los niveles numéricos en caracteres bloques y los espaciamos elegantemente
+    const asciiWave = waveData
+      .map(height => {
+        const index = Math.min(Math.max(height, 0), 8);
+        return barChars[index];
+      })
+      .join(" ");
+
+    // Centramos verticalmente las ondas dentro de las 10 líneas de visualizerBox
+    const paddingLines = "\n".repeat(4);
+    visualizerBox.setContent(`${paddingLines}   {green-fg}${asciiWave}{/green-fg}`);
     screen.render();
   }
 
@@ -234,7 +251,6 @@ export function createUI() {
     screen.render();
   }
 
-  // Soporte de compatibilidad: por si el visualizador antiguo inyecta bloques directos
   function append(content = "") {
     if (!content) return;
     visualizerBox.setContent(content);
@@ -265,7 +281,6 @@ export function createUI() {
     screen.render();
   }
 
-  // Limpieza profunda del búfer interno del textbox al ganar foco
   function focusInput() {
     inputFocused = true;
     input.setValue("");
@@ -312,7 +327,7 @@ export function createUI() {
   return {
     screen,
     playlistBox, 
-    visualBox: visualizerBox, // Alias para evitar caídas si se busca por el nombre viejo
+    visualBox: visualizerBox, 
     input,
     set,
     append,
@@ -321,6 +336,7 @@ export function createUI() {
     setFileInfo,
     setAlbumArt,
     setVisualizer,
+    setWaveform, // Ahora player.js puede llamarlo sin provocar fallos de ejecución
     setVolumeState,
     appendLog,
     clearLog,

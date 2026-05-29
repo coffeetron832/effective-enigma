@@ -15,11 +15,8 @@ async function main() {
   let playlist = [];
 
   try {
-
     playlist = await loadPlaylist("./music");
-
   } catch (error) {
-
     ui.appendLog(`
 {red-fg}Could not load ./music folder{/red-fg}
 
@@ -79,31 +76,21 @@ ${String(error?.message || error)}
   });
 
   process.once("uncaughtException", error => {
-
     try {
-
       cleanup();
-
     } finally {
-
       console.error("\nFatal Error:\n");
       console.error(error);
-
       process.exit(1);
     }
   });
 
   process.once("unhandledRejection", error => {
-
     try {
-
       cleanup();
-
     } finally {
-
       console.error("\nUnhandled Promise Rejection:\n");
       console.error(error);
-
       process.exit(1);
     }
   });
@@ -113,20 +100,14 @@ ${String(error?.message || error)}
   });
 
   // =========================================================================
-  // PRUEBA DE DIAGNÓSTICO PARA LA INTERFERENCIA DE AUDIO:
-  // Comentamos temporalmente el inicio del visualizador. Si el audio suena bien
-  // tras este cambio, el problema es que el visualizador y mpv saturan el 
-  // hardware de audio simultáneamente.
+  // CORRECCIÓN CRUCIAL:
+  // Comentamos la animación del viejo visualizador simulado.
+  // Ahora es player.js el que le inyecta las ondas reales a la UI en cada frame de audio.
   // =========================================================================
-  visualizer.start(); 
+  // visualizer.start(); 
 
-  // Renderizamos la interfaz gráfica inicial
+  // Renderizamos la interfaz gráfica inicial de forma limpia
   ui.render();
-
-  // CORRECCIÓN PARA LETRAS DUPLICADAS:
-  // Se elimina 'ui.focusInput()' de aquí. El foco lo gestiona exclusivamente
-  // el inicializador dentro de 'core/commands.js' para evitar eventos fantasma.
 }
 
 main();
-
