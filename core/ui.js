@@ -29,8 +29,8 @@ export function createUI() {
     label: " [ NOW PLAYING ] ",
     border: { type: "line" },
     style: { border: { fg: "green" } },
-    padding: { top: 0, left: 2, right: 2 }, // Reducido el padding superior
-    scrollable: true,                      // Permite scroll interno si la terminal es diminuta
+    padding: { top: 0, left: 2, right: 2 },
+    scrollable: true,
     alwaysScroll: true
   });
 
@@ -76,9 +76,10 @@ export function createUI() {
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
 
-  screen.key(["C-c"], () => {
-    return process.exit(0);
-  });
+  // CORRECCIÓN: Eliminamos el event listener intrusivo de C-c para permitir que index.js maneje el ciclo de cierre de mpv.
+
+  // Guardamos una referencia única al listener de teclado para evitar duplicados
+  let globalKeypressListener = null;
 
   return {
     screen: screen,
@@ -94,7 +95,6 @@ export function createUI() {
           ? nowPlayingBox.width 
           : Math.floor(screen.width * 0.7);
 
-        // Dejamos un margen seguro a la derecha para la barra
         const barWidth = Math.max(10, computedWidth - 25);
         
         let safePercent = parseInt(percent);
@@ -110,15 +110,12 @@ export function createUI() {
         const currentTimeStr = formatSeconds(current);
         const totalTimeStr = formatSeconds(total);
 
-        // CORRECCIÓN: Si el nombre del track excede el espacio visual seguro, lo truncamos con '...'
         const maxTextLength = Math.max(20, computedWidth - 12);
         let displayTrackName = trackName;
         if (displayTrackName.length > maxTextLength) {
           displayTrackName = displayTrackName.slice(0, maxTextLength - 3) + "...";
         }
 
-        // CORRECCIÓN DE DISEÑO: Compactado estricto a un solo salto de línea simple (\n)
-        // Esto garantiza que entre en cualquier resolución vertical de terminal.
         nowPlayingBox.setContent(
           `{bold}Track:{/bold} ${displayTrackName}\n` +
           `Progress: [${progressBar}] ${safePercent}%\n` +
@@ -127,17 +124,15 @@ export function createUI() {
       } catch (e) {
         nowPlayingBox.setContent(`{bold}Track:{/bold} ${trackName}\nTime: ${current} / ${total}`);
       }
-      screen.render();
+      // CORRECCIÓN: Quitamos el renderizado síncrono automático
     },
 
     setVisualizer: (asciiSpectrum) => {
       visualizerBox.setContent(asciiSpectrum);
-      screen.render();
     },
 
     setAlbumArt: (asciiArt, album, year) => {
       albumBox.setContent(`${asciiArt}\n\n{yellow-fg}${album}{/}\n(${year})`);
-      screen.render();
     },
 
     setVolumeState: (volume, loop, shuffle, eqMode) => {
@@ -147,46 +142,53 @@ export function createUI() {
         `• {bold}Shuffle:{/bold}  [${shuffle ? "ON" : "OFF"}]\n` +
         `• {bold}Equalizer:{/bold} {green-fg}${eqMode}{/}`
       );
-      screen.render();
     },
 
     setPlaylist: (playlist, currentIndex) => {
       const items = playlist.map((track, idx) => {
-        return idx === currentIndex ? `-> * ${track.name}` : `    ${track.name}`;
+        return idx === currentIndex ? `-> * ${track.name}` : `     ${track.name}`;
       }).slice(Math.max(0, currentIndex - 2), currentIndex + 3);
 
       playlistBox.setContent(items.join("\n"));
-      screen.render();
     },
 
     setFileInfo: (codec, bitrate) => {
       playlistBox.setLabel(` [ PLAYLIST - ${codec} @ ${bitrate} ] `);
-      screen.render();
     },
 
     appendLog: (msg) => {
       nowPlayingBox.setLabel(` [ LOG: ${msg.replace(/\{.*?\}/g, "")} ] `);
-      screen.render();
     },
 
     clearLog: () => {
       nowPlayingBox.setLabel(" [ NOW PLAYING ] ");
-      screen.render();
     },
 
     clearVisual: () => {
       visualizerBox.setContent("\n\n         [ AUDIO PAUSED / STOPPED ]");
-      screen.render();
     },
 
     setWaveform: () => {},
 
+    // CORRECCIÓN: Manejo de entrada seguro y limpio sin fugas de memoria
     getInput: (callback) => {
-      screen.on("keypress", (ch, key) => {
+      if (globalKeypressListener) {
+        screen.removeListener("keypress", globalKeypressListener);
+      }
+      
+      globalKeypressListener = (ch, key) => {
         callback(ch, key);
-      });
+      };
+
+      screen.on("keypress", globalKeypressListener);
+
       return {
-        removeAllListeners: () => {},
+        removeAllListeners: () => {
+          if (globalKeypressListener) {
+            screen.removeListener("keypress", globalKeypressListener);
+            globalKeypressListener = null;
+          }
+        },
         setValue: () => {},
         focusInput: () => {}
       };
@@ -194,6 +196,6 @@ export function createUI() {
 
     focusInput: () => {},
     destroy: () => { screen.destroy(); },
-    render: () => { screen.render(); }
+    render: () => { screen.render(); } // Ahora el renderizado es explícito y controlado desde fuera
   };
 }

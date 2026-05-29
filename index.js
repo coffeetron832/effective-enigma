@@ -22,21 +22,31 @@ async function main() {
     );
   }
 
+  // 1. Inicializamos el reproductor pasándole la interfaz
   const player = createPlayer({
     playlist,
     ui
   });
 
+  // 2. Inicializamos el visualizador nativo basado en PCM
   const visualizer = createVisualizer({
     ui,
     player
   });
 
+  // CORRECCIÓN CRÍTICA: Conectamos el cable de datos binarios. 
+  // Ahora el player sabe exactamente a dónde enviar los chunks de audio de mpv.
+  player.setVisualizer(visualizer);
+
+  // 3. Registramos los comandos del teclado pasándole todas las dependencias
   createCommands({
     ui,
     player,
     visualizer
   });
+
+  // CORRECCIÓN DE PANTALLA: Encendemos el bucle asíncrono gráfico a 30 FPS
+  visualizer.start();
 
   let cleanedUp = false;
 

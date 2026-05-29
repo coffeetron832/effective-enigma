@@ -4,13 +4,14 @@ import path from "path";
 import * as mm from "music-metadata";
 import sharp from "sharp";
 
-export function createPlayer({ playlist: initialPlaylist = [], ui }) {
+export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = null }) {
   let playlist = [...initialPlaylist];
   let index = 0;
   let audioProcess = null;
   let playing = false;
   let startedAt = 0;
   let isManualKill = false; 
+  let currentTrackId = 0; 
 
   let currentVolume = 80;
   let loopState = false;
@@ -35,7 +36,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
         .map(file => ({
           name: path.basename(file, path.extname(file)),
           path: path.join(musicDir, file),
-          duration: 180, // CORRECCIÓN: Inicializado como número entero por defecto
+          duration: 180, 
           artist: "Local Track"
         }));
 
@@ -53,17 +54,21 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   function cleanup() {
     if (audioProcess) {
       try {
-        // Removemos listeners antes de matar para evitar colisiones en cascada
         audioProcess.removeAllListeners("exit");
-        audioProcess.kill("SIGKILL");
+        audioProcess.kill("SIGKILL"); 
       } catch {}
       audioProcess = null;
     }
+    try {
+      if (fs.existsSync("/tmp/mascii-mpv.sock")) {
+        fs.unlinkSync("/tmp/mascii-mpv.sock");
+      }
+    } catch {}
     playing = false;
     startedAt = 0;
   }
 
-  async function updateAlbumArtMetadata(track, ui) {
+  async function updateAlbumArtMetadata(track, ui, myTrackId) {
     const defaultArt = [
       "      .:::::.",
       "    .:::::::::.",
@@ -71,7 +76,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       "    ░░░░░░░░░░░░░",
       " ─────────────────",
       "  ───────────────",
-      "   ─────────────"
+      "    ─────────────"
     ].join("\n");
 
     let albumName = "Retro Terminal Hits";
@@ -79,11 +84,13 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
     try {
       const metadata = await mm.parseFile(track.path);
+      
+      if (myTrackId !== currentTrackId) return;
+
       if (metadata.common.album) albumName = metadata.common.album;
       if (metadata.common.year) year = String(metadata.common.year);
       if (metadata.common.artist) track.artist = metadata.common.artist;
 
-      // CORRECCIÓN: Extraemos y parseamos la duración real a segundos enteros
       if (metadata.format.duration) {
         track.duration = Math.max(1, Math.round(metadata.format.duration));
       }
@@ -102,6 +109,8 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
           .ensureAlpha()
           .raw()
           .toBuffer({ resolveWithObject: true });
+
+        if (myTrackId !== currentTrackId) return;
 
         let asciiResult = "";
         const width = info.width;
@@ -125,9 +134,11 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
         ui.setAlbumArt(defaultArt, albumName, year);
       }
     } catch {
-      ui.setAlbumArt(defaultArt, albumName, year);
+      if (myTrackId === currentTrackId) {
+        ui.setAlbumArt(defaultArt, albumName, year);
+      }
     }
-    if (ui.render) ui.render();
+    if (myTrackId === currentTrackId && ui.render) ui.render();
   }
 
   function play() {
@@ -139,36 +150,36 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
     cleanup();
     isManualKill = false; 
+    currentTrackId++; 
+    const myTrackId = currentTrackId;
 
     try {
       playing = true;
       startedAt = Date.now();
 
-      // SOLUCIÓN AL SALTO DE CANCIONES: Quitamos cualquier redirección a pipes PCM lentos o volcado asíncrono.
-      // mpv ahora reproduce de manera estándar con su regulador de tiempo nativo activo.
+      // CORRECCIÓN: Levantamos mpv de forma normal (tiempo real) agregando un nodo IPC
+      // e inyectando un filtro de observación nativo ('computed') para el espectro.
       audioProcess = spawn(
         "mpv",
         [
           "--no-video",
           "--no-terminal",
+          "--really-quiet",
           "--keep-open=no",
           `--volume=${currentVolume}`,
+          "--ao=pulse,alsa",
+          // Filtro nativo que calcula la amplitud de la onda en tiempo real sin desviar el flujo de salida
+          "--af=lavfi=[asplit[out1][out2],[out2]asubboost,atintegral,asplit[vis][out3],[vis]volume=0[muted]]",
+          "--input-ipc-server=/tmp/mascii-mpv.sock",
           track.path
         ],
         {
           detached: false,
-          stdio: ["ignore", "ignore", "pipe"] 
+          stdio: ["ignore", "ignore", "ignore"] // Ignoramos pipes directos para evitar cierres prematuros
         }
       );
 
-      audioProcess.stderr.on("data", data => {
-        const text = String(data || "").trim();
-        if (text.includes("error") || text.includes("fatal")) {
-          ui.appendLog(`{red-fg}mpv error:{/red-fg} ${text.slice(0, 30)}`);
-        }
-      });
-
-      audioProcess.on("exit", () => {
+      audioProcess.on("exit", (code) => {
         if (playing && !isManualKill) {
           next();
         } else {
@@ -183,7 +194,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
       ui.setFileInfo("MPEG Layer 3", "320kbps");
       ui.setPlaylist(playlist, index);
-      updateAlbumArtMetadata(track, ui);
+      updateAlbumArtMetadata(track, ui, myTrackId);
 
     } catch (error) {
       playing = false;
@@ -234,15 +245,18 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     return Math.floor((Date.now() - startedAt) / 1000);
   }
   
-  // CORRECCIÓN: Retorna la propiedad numérica dinámica extraída en los metadatos
   function getDuration() {
     const track = getTrack();
     return track && track.duration ? track.duration : 180;
   }
 
+  function setVisualizer(visInstance) {
+    visualizer = visInstance;
+  }
+
   return {
     play, stop, toggle, next, prev, isPlaying, getTrack,
     getCurrentIndex, getTracks, getCurrentTime, getDuration,
-    loadTracks, getVolume, isLoop, isShuffle, getEQ
+    loadTracks, getVolume, isLoop, isShuffle, getEQ, setVisualizer
   };
 }

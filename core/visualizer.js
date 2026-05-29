@@ -1,116 +1,62 @@
-import fs from "fs";
-import { spawn } from "child_process";
-
-const LEVELS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 const WAVEFORM_SIZE = 25; 
+const LEVELS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 export function createVisualizer({ ui, player }) {
   let interval = null;
-  let cavaProcess = null;
   let spectrum = new Array(WAVEFORM_SIZE).fill(0);
-  const CAVA_CONFIG_PATH = "/tmp/mascii-visualizer-cava.conf";
   let fallbackFrame = 0;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
   }
 
-  function createCavaConfig() {
-    const content = `
-[general]
-bars = ${WAVEFORM_SIZE}
-framerate = 60
-autosens = 1
-sensitivity = 100
+  /**
+   * Procesa los chunks de audio PCM crudo inyectados desde el reproductor
+   * @param {Buffer} chunk - Datos binarios de audio en 8-bit PCM
+   */
+  function handleAudioStream(chunk) {
+    if (!player.isPlaying() || !chunk || chunk.length === 0) return;
 
-[smoothing]
-integral = 7
-gravity = 20
-ignore = 0
+    // Dividimos el chunk en bloques según el tamaño del espectro visual
+    const blockSize = Math.floor(chunk.length / WAVEFORM_SIZE);
+    if (blockSize < 1) return;
 
-[input]
-method = pulse
-source = auto
-
-[output]
-method = raw
-raw_target = /dev/stdout
-data_format = binary
-bar_delimiter = 0
-`;
-    fs.writeFileSync(CAVA_CONFIG_PATH, content);
-    return CAVA_CONFIG_PATH;
-  }
-
-  function startCava() {
-    stopCava();
-    const config = createCavaConfig();
-
-    cavaProcess = spawn("cava", ["-p", config], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { 
-        ...process.env,
-        XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.uid || 1000}`
-      }
-    });
-
-    cavaProcess.on("error", (err) => {
-      if (ui && ui.appendLog) {
-        ui.appendLog(`{yellow-fg}Visualizer status:{/yellow-fg} Engine initialized in fallback mode.`);
-      }
-    });
-
-    let buffer = Buffer.alloc(0);
-
-    cavaProcess.stdout.on("data", chunk => {
-      if (!player.isPlaying()) {
-        buffer = Buffer.alloc(0);
-        return;
+    for (let i = 0; i < WAVEFORM_SIZE; i++) {
+      let sum = 0;
+      const start = i * blockSize;
+      
+      // Calculamos la amplitud absoluta (volumen físico) del bloque de audio
+      for (let j = 0; j < blockSize; j++) {
+        // Al ser PCM de 8 bits sin signo, el centro de la onda es 128
+        const sample = chunk[start + j];
+        sum += Math.abs(sample - 128);
       }
 
-      buffer = Buffer.concat([buffer, chunk]);
+      const average = sum / blockSize;
+      // Normalizamos el promedio de amplitud a un porcentaje (0 - 100)
+      const rawValue = clamp(Math.floor((average / 64) * 100), 0, 100);
 
-      if (buffer.length > WAVEFORM_SIZE * 8) {
-        buffer = buffer.subarray(buffer.length - (WAVEFORM_SIZE * 2));
+      // Aplicamos inercia física (easing) para un movimiento fluido de las barras
+      if (rawValue > spectrum[i]) {
+        spectrum[i] = rawValue;
+      } else {
+        spectrum[i] = Math.max(0, Math.floor(spectrum[i] * 0.70));
       }
-
-      while (buffer.length >= WAVEFORM_SIZE) {
-        const frame = buffer.subarray(0, WAVEFORM_SIZE);
-        buffer = buffer.subarray(WAVEFORM_SIZE);
-
-        for (let i = 0; i < WAVEFORM_SIZE; i++) {
-          const rawValue = Math.floor((frame[i] / 255) * 100);
-          if (rawValue > spectrum[i]) {
-            spectrum[i] = rawValue;
-          } else {
-            spectrum[i] = Math.max(0, Math.floor(spectrum[i] * 0.75));
-          }
-        }
-      }
-    });
-
-    cavaProcess.stderr.on("data", () => {});
-  }
-
-  function stopCava() {
-    if (cavaProcess) {
-      try { 
-        cavaProcess.kill("SIGKILL"); 
-      } catch {}
-      cavaProcess = null;
     }
-    try {
-      if (fs.existsSync(CAVA_CONFIG_PATH)) fs.unlinkSync(CAVA_CONFIG_PATH);
-    } catch {}
-    spectrum.fill(0);
   }
 
   function getVisualizerSpectrum(height = 6) {
     if (!player.isPlaying()) {
-      return "\n".repeat(Math.floor(height / 2)) + "         [ AUDIO PAUSED / STOPPED ]";
+      const paddingVal = Math.max(0, Math.floor((height - 1) / 2));
+      const lines = new Array(paddingVal).fill("  ");
+      lines.push("         [ AUDIO PAUSED / STOPPED ]");
+      while (lines.length < height) lines.push("  ");
+      lines.push(" " + "░".repeat(WAVEFORM_SIZE * 2 + 1));
+      return lines.join("\n");
     }
 
-    const isSpectrumEmpty = spectrum.length === 0 || spectrum.every(v => v === 0);
+    // Si no hay datos de audio PCM activos, activamos el fallback matemático elegante
+    const isSpectrumEmpty = spectrum.every(v => v === 0);
     let targetSpectrum = [...spectrum];
 
     if (isSpectrumEmpty) {
@@ -152,13 +98,10 @@ bar_delimiter = 0
       const duration = typeof player.getDuration === "function" ? player.getDuration() : 180;
       
       let percentage = duration > 0 ? Math.round((current / duration) * 100) : 0;
-      if (isNaN(percentage) || percentage < 0) percentage = 0;
-      if (percentage > 100) percentage = 100;
+      percentage = clamp(percentage, 0, 100);
 
       const trackName = track ? `${track.artist || "Local Track"} - ${track.name}` : "No Track";
       
-      // CORRECCIÓN: Quitamos el formateo de strings redundante (currentTimeStr, totalTimeStr)
-      // Pasamos las variables numéricas directas para que calce con la firma de ui.js
       ui.setNowPlaying(trackName, current, duration, percentage);
 
       const asciiVisualizer = getVisualizerSpectrum(7);
@@ -170,25 +113,32 @@ bar_delimiter = 0
       const eqMode = typeof player.getEQ === "function" ? player.getEQ() : "ROCK";
 
       ui.setVolumeState(volume, isLoop, isShuffle, eqMode);
+
+      if (ui.render) ui.render();
     } catch (e) {
-      // Protector de bucle de renderizado
+      // Protector gráfico
     }
   }
 
   function start() {
-    startCava();
     render();
     if (interval) clearInterval(interval);
-    interval = setInterval(() => { render(); }, 50);
+    // Bucle estable a 30 FPS para sincronización TUI sin parpadeos
+    interval = setInterval(() => { render(); }, 33);
   }
 
   function stop() {
-    stopCava();
     if (interval) {
       clearInterval(interval);
       interval = null;
     }
+    spectrum.fill(0);
   }
 
-  return { start, stop, render };
+  return { 
+    start, 
+    stop, 
+    render,
+    handleAudioStream // Inyectamos este hook para capturar el pipe de datos de mpv
+  };
 }
