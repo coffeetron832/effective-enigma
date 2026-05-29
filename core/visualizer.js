@@ -1,62 +1,91 @@
-const WAVEFORM_SIZE = 25; 
+const MAX_WAVEFORM_SIZE = 80; 
 const LEVELS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 export function createVisualizer({ ui, player }) {
   let interval = null;
-  let spectrum = new Array(WAVEFORM_SIZE).fill(0);
+  let spectrum = new Array(MAX_WAVEFORM_SIZE).fill(0);
+  let audioTickActive = false;
   let waveFrame = 0;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
   }
 
+  function injectAudioTick() {
+    audioTickActive = true;
+  }
+
   /**
-   * CORRECCIÓN DE BARRAS: Genera amplitudes dinámicas rítmicas distribuidas por frecuencias
-   * (graves a la izquierda, medios al centro, agudos a la derecha) emulando un ecualizador real.
+   * PROCESAMIENTO ORDENADO POR FRECUENCIAS (Estilo CAVA):
+   * Divide el espectro horizontal en Graves (izq), Medios (centro) y Agudos (der).
    */
-  function calculateRealtimeSpectrum() {
+  function processAudioToBars(barsCount) {
     if (!player.isPlaying()) {
       spectrum.fill(0);
       return;
     }
 
-    // Velocidad de oscilación de la onda gráfica
-    waveFrame += 0.35; 
+    if (audioTickActive) {
+      waveFrame += 0.4;
+      audioTickActive = false; 
+    } else {
+      waveFrame += 0.02; // Caída/movimiento sutil en pausas leves
+    }
 
-    for (let i = 0; i < WAVEFORM_SIZE; i++) {
-      const timeFactor = waveFrame + (i * 0.4);
+    const track = player.getTrack();
+    let seed = 1;
+    if (track && track.name) {
+      for (let s = 0; s < track.name.length; s++) seed += track.name.charCodeAt(s);
+    }
+
+    for (let i = 0; i < barsCount; i++) {
+      // Normalizamos la posición de la barra entre 0 y 1 para mapear las zonas
+      const n = i / (barsCount - 1 || 1);
+
+      // 1. FILTROS DE DISTRIBUCIÓN (Campanas de Gauss para ordenar frecuencias)
+      const bassZone = Math.exp(-Math.pow((n - 0.15) / 0.18, 2));   // Pico en el 15% (Izquierda)
+      const midsZone = Math.exp(-Math.pow((n - 0.50) / 0.22, 2));   // Pico en el 50% (Centro)
+      const trebleZone = Math.exp(-Math.pow((n - 0.85) / 0.18, 2)); // Pico en el 85% (Derecha)
+
+      // 2. GENERACIÓN DE ONDAS ESPECÍFICAS POR CANAL
+      // Graves: Oscilaciones pesadas y lentas
+      const bass = (Math.sin(waveFrame * 1.2 + seed * 0.1) * 35 + 45) * bassZone;
       
-      // Simulación física de frecuencias
-      const bass = Math.sin(timeFactor * 0.7) * (WAVEFORM_SIZE - i) * 1.6;
-      const mids = Math.cos(timeFactor * 1.3) * (12 - Math.abs(12 - i)) * 2.0;
-      const treble = Math.sin(timeFactor * 2.1) * i * 1.1;
+      // Medios: Dinámica constante y rítmica
+      const mids = (Math.cos(waveFrame * 2.1 + i * 0.1 + seed * 0.2) * 30 + 40) * midsZone;
+      
+      // Agudos: Oscilaciones rápidas, cortas y nerviosas
+      const treble = (Math.sin(waveFrame * 3.8 - i * 0.3 + seed * 0.3) * 25 + 30) * trebleZone;
 
-      // Amplitud unificada con ganancia base
-      let amplitude = Math.abs(bass + mids + treble) * 1.6;
+      // 3. COMBINACIÓN FILTRADA
+      let amplitude = bass + mids + treble;
 
-      // Inyección de micro-picos rítmicos controlados aleatoriamente
-      if (Math.random() > 0.75) {
-        amplitude += Math.random() * 30;
+      // Inyección de picos rítmicos controlados (golpes de batería simulados en graves/medios)
+      if (Math.sin(waveFrame * 1.5 + seed) > 0.75 && (i % 4 === 0)) {
+        amplitude += (bassZone * 25) + (midsZone * 15);
       }
 
-      const rawValue = clamp(Math.floor(amplitude), 5, 100);
+      const targetValue = clamp(Math.floor(amplitude), 3, 100);
 
-      // Suavizado (Easing) para evitar saltos toscos y dar caída natural
-      if (rawValue > spectrum[i]) {
-        spectrum[i] = Math.floor(rawValue * 0.8 + spectrum[i] * 0.2);
+      // 4. FILTRO DE INERCIA Y CAÍDA BALÍSTICA (Suavizado de barras)
+      if (targetValue > spectrum[i]) {
+        // Subida rápida
+        spectrum[i] = Math.floor(targetValue * 0.82 + spectrum[i] * 0.18);
       } else {
-        spectrum[i] = Math.max(0, Math.floor(spectrum[i] * 0.72));
+        // Caída lenta y elegante para que no parpadee tosco
+        spectrum[i] = Math.max(0, Math.floor(spectrum[i] * 0.78));
       }
     }
   }
 
-  function getVisualizerSpectrum(height = 6) {
+  function getVisualizerSpectrum(height = 7, barsCount) {
     if (!player.isPlaying()) {
       const paddingVal = Math.max(0, Math.floor((height - 1) / 2));
       const lines = new Array(paddingVal).fill("  ");
-      lines.push("         [ AUDIO PAUSED / STOPPED ]");
+      const paddingSpaces = " ".repeat(Math.max(2, Math.floor((barsCount * 2 - 26) / 2)));
+      lines.push(`${paddingSpaces}[ AUDIO PAUSED / STOPPED ]`);
       while (lines.length < height) lines.push("  ");
-      lines.push(" " + "░".repeat(WAVEFORM_SIZE * 2 + 1));
+      lines.push(" " + "░".repeat(barsCount * 2 + 1));
       return lines.join("\n");
     }
 
@@ -65,19 +94,21 @@ export function createVisualizer({ ui, player }) {
 
     for (let h = height; h > 0; h--) {
       let line = "  ";
-      spectrum.forEach(value => {
+      for (let i = 0; i < barsCount; i++) {
+        const value = spectrum[i] || 0;
         const normalizedValue = Math.round((value / maxValInSpectrum) * height);
+        
         if (normalizedValue >= h) {
           const blockIndex = clamp(Math.floor((value / maxValInSpectrum) * 8), 1, 8);
           line += LEVELS[blockIndex] + " ";
         } else {
           line += "  "; 
         }
-      });
+      }
       lines.push(line);
     }
 
-    const footerLine = " " + "░".repeat(WAVEFORM_SIZE * 2 + 1);
+    const footerLine = " " + "░".repeat(barsCount * 2 + 1);
     lines.push(footerLine);
 
     return lines.join("\n");
@@ -89,17 +120,17 @@ export function createVisualizer({ ui, player }) {
       const current = typeof player.getCurrentTime === "function" ? player.getCurrentTime() : 0;
       const duration = typeof player.getDuration === "function" ? player.getDuration() : 180;
       
-      let percentage = duration > 0 ? Math.round((current / duration) * 100) : 0;
-      percentage = clamp(percentage, 0, 100);
-
       const trackName = track ? `${track.artist || "Local Track"} - ${track.name}` : "No Track";
+      const percentage = duration > 0 ? Math.min(100, Math.round((current / duration) * 100)) : 0;
       
       ui.setNowPlaying(trackName, current, duration, percentage);
 
-      // Actualizamos los datos físicos de las barras
-      calculateRealtimeSpectrum();
+      const uiSize = ui.getSize ? ui.getSize() : { width: 80 };
+      const calculatedWidth = Math.min(MAX_WAVEFORM_SIZE, Math.max(20, Math.floor((uiSize.width || 80) * 0.62)));
 
-      const asciiVisualizer = getVisualizerSpectrum(7);
+      processAudioToBars(calculatedWidth);
+
+      const asciiVisualizer = getVisualizerSpectrum(7, calculatedWidth);
       ui.setVisualizer(asciiVisualizer);
 
       const volume = typeof player.getVolume === "function" ? player.getVolume() : 80;
@@ -110,15 +141,13 @@ export function createVisualizer({ ui, player }) {
       ui.setVolumeState(volume, isLoop, isShuffle, eqMode);
 
       if (ui.render) ui.render();
-    } catch (e) {
-      // Protector de errores UI
-    }
+    } catch (e) {}
   }
 
   function start() {
     if (interval) clearInterval(interval);
+    audioTickActive = false;
     render();
-    // Bucle estable a 30 FPS para evitar flicker en la TUI
     interval = setInterval(() => { render(); }, 33);
   }
 
@@ -133,6 +162,7 @@ export function createVisualizer({ ui, player }) {
   return { 
     start, 
     stop, 
-    render
+    render,
+    injectAudioTick
   };
 }

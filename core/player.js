@@ -55,6 +55,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
     if (audioProcess) {
       try {
         audioProcess.removeAllListeners("exit");
+        audioProcess.stdout?.removeAllListeners("data");
         audioProcess.kill("SIGKILL"); 
       } catch {}
       audioProcess = null;
@@ -152,36 +153,39 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
       playing = true;
       startedAt = Date.now();
 
-      // CORRECCIÓN: Volvemos a la ejecución estándar en tiempo real.
-      // Cambiamos stdio a 'pipe' en el canal stderr para mantener enganchado a mpv sin colgar la CPU.
+      // SOLUCIÓN AL SILENCIO: Quitamos el volcado masivo a archivo externo que bloqueaba ALSA/Pulse.
+      // Ahora mpv corre 100% nativo y libre. Usamos los logs nativos de estado de reproducción como trigger dinámico de volumen.
       audioProcess = spawn(
         "mpv",
         [
           "--no-video",
           "--no-terminal",
-          "--really-quiet",
           "--keep-open=no",
           `--volume=${currentVolume}`,
-          "--ao=pulse,alsa", 
+          "--ao=pulse,alsa",
+          "--term-status-msg=AV: ${time-pos} / ${duration} (${percent-pos}%) A-V:0.000",
           track.path
         ],
         {
           detached: false,
-          stdio: ["ignore", "ignore", "pipe"] 
+          stdio: ["ignore", "pipe", "ignore"] // Escuchamos el stdout de texto estándar, súper ligero
         }
       );
 
-      // Mantenemos vivo el flujo de mpv absorbiendo el canal stderr de forma pasiva
-      audioProcess.stderr.on("data", () => {});
+      // Cada vez que mpv cambie de milisegundo, enviamos una señal de "tick" real al visualizador
+      audioProcess.stdout.on("data", chunk => {
+        const dataStr = chunk.toString();
+        if (dataStr.includes("AV:") && visualizer && typeof visualizer.injectAudioTick === "function") {
+          visualizer.injectAudioTick();
+        }
+      });
 
-      // Sincronizamos el arranque del visualizador con el spawn del proceso real
       audioProcess.on("spawn", () => {
         if (visualizer) visualizer.start();
       });
 
       audioProcess.on("exit", (code) => {
         if (visualizer) visualizer.stop();
-        // Solo avanza si el proceso terminó por vejez (code 0) y no por un stop() manual
         if (playing && !isManualKill && code === 0) {
           next();
         } else {
