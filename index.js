@@ -2,7 +2,6 @@
 
 import { createUI } from "./core/ui.js";
 import { createPlayer } from "./core/player.js";
-import { createVisualizer } from "./core/visualizer.js";
 import { createCommands } from "./core/commands.js";
 import { loadPlaylist } from "./core/playlist.js";
 
@@ -10,6 +9,7 @@ console.log("MASCII VERSION 2026");
 
 async function main() {
   const ui = createUI();
+  let uiInterval = null;
 
   let playlist = [];
   try {
@@ -22,31 +22,41 @@ async function main() {
     );
   }
 
-  // 1. Inicializamos el reproductor pasándole la interfaz
+  // 1. Inicializamos el reproductor pasándole únicamente la interfaz
   const player = createPlayer({
     playlist,
     ui
   });
 
-  // 2. Inicializamos el visualizador nativo basado en PCM
-  const visualizer = createVisualizer({
+  // 2. Registramos los comandos del teclado removiendo la dependencia del visualizador
+  createCommands({
     ui,
     player
   });
 
-  // CORRECCIÓN CRÍTICA: Conectamos el cable de datos binarios. 
-  // Ahora el player sabe exactamente a dónde enviar los chunks de audio de mpv.
-  player.setVisualizer(visualizer);
+  // 3. Encendemos un bucle asíncrono gráfico ligero (30 FPS) para refrescar el tiempo de reproducción
+  uiInterval = setInterval(() => {
+    if (typeof ui.render === "function") {
+      // Forzamos al reproductor a actualizar internamente sus estados de texto y barras de progreso
+      if (player && typeof player.getCurrentTime === "function") {
+        const track = player.getTrack();
+        const current = player.getCurrentTime();
+        const duration = player.getDuration();
+        const trackName = track ? `${track.artist || "Local Track"} - ${track.name}` : "No Track";
+        const percentage = duration > 0 ? Math.min(100, Math.round((current / duration) * 100)) : 0;
+        
+        ui.setNowPlaying(trackName, current, duration, percentage);
+        
+        const volume = typeof player.getVolume === "function" ? player.getVolume() : 80;
+        const isLoop = typeof player.isLoop === "function" ? player.isLoop() : false;
+        const isShuffle = typeof player.isShuffle === "function" ? player.isShuffle() : false;
+        const eqMode = typeof player.getEQ === "function" ? player.getEQ() : "ROCK";
 
-  // 3. Registramos los comandos del teclado pasándole todas las dependencias
-  createCommands({
-    ui,
-    player,
-    visualizer
-  });
-
-  // CORRECCIÓN DE PANTALLA: Encendemos el bucle asíncrono gráfico a 30 FPS
-  visualizer.start();
+        ui.setVolumeState(volume, isLoop, isShuffle, eqMode);
+      }
+      ui.render();
+    }
+  }, 33);
 
   let cleanedUp = false;
 
@@ -54,9 +64,10 @@ async function main() {
     if (cleanedUp) return;
     cleanedUp = true;
 
-    try {
-      visualizer?.stop?.();
-    } catch {}
+    if (uiInterval) {
+      clearInterval(uiInterval);
+      uiInterval = null;
+    }
 
     try {
       player?.stop?.();

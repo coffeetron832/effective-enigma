@@ -1,110 +1,68 @@
-import { spawn } from "child_process";
-
 const MAX_WAVEFORM_SIZE = 80; 
+
+// Bloques de densidad progresiva para el renderizado geométrico limpio
 const LEVELS = [" ", "▅", "▆", "▇", "█"];
-const TOP_MARK = "▀";
+const TOP_MARK = "▀"; 
 
 export function createVisualizer({ ui, player }) {
   let uiInterval = null;
+  let animationFrame = 0;
+  
   let spectrum = new Array(MAX_WAVEFORM_SIZE).fill(0);
   let peakHold = new Array(MAX_WAVEFORM_SIZE).fill(0);
-  let trackAudioMap = [];
-  let currentAnimationTick = 0;
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
   }
 
   /**
-   * EXTRACCIÓN ASÍNCRONA POR STREAMS (Sin lag):
-   * Lee el archivo en segundo plano sin congelar el renderizado de la terminal.
+   * ANIMACIÓN GEOMÉTRICA PURA (Ligera y Fluida):
+   * Calcula alturas combinando funciones trigonométricas armónicas por zonas.
    */
-  function analyzeTrackAsync(trackPath) {
-    trackAudioMap = [];
-    
-    // Usamos una lectura asíncrona de envolvente de volumen muy ligera
-    const ffProcess = spawn("ffmpeg", [
-      "-i", trackPath,
-      "-ac", "1",
-      "-filter:a", "aresample=100,afade=t=in:ss=0:d=0.1", // Muestreo ultra bajo para velocidad pura
-      "-f", "u8", // Forzamos salida en bytes crudos de 8 bits
-      "-"
-    ], { stdio: ["ignore", "pipe", "ignore"] });
-
-    ffProcess.stdout.on("data", chunk => {
-      // Cada byte leído es directamente un pico de volumen en ese microsegundo
-      for (let i = 0; i < chunk.length; i++) {
-        // El formato u8 va de 0 a 255 (donde 128 es el centro/silencio)
-        const amplitude = Math.abs(chunk[i] - 128);
-        const intensity = clamp(Math.round((amplitude / 128) * 100), 5, 100);
-        trackAudioMap.push(intensity);
-      }
-    });
-
-    ffProcess.on("close", () => {
-      // Si el mapa quedó vacío por error, creamos un respaldo armónico dinámico
-      if (trackAudioMap.length === 0) {
-        for (let i = 0; i < 5000; i++) {
-          trackAudioMap.push(Math.floor(Math.sin(i * 0.05) * 30) + 40);
-        }
-      }
-    });
-  }
-
-  /**
-   * PROCESADOR ESPECTRAL RÍTMICO:
-   * Acopla la intensidad real extraída con las frecuencias ordenadas del ecualizador.
-   */
-  function processAudioToBars(barsCount) {
+  function generateProceduralWaves(barsCount) {
     if (!player.isPlaying()) {
       spectrum.fill(0);
       return;
     }
 
-    currentAnimationTick += 0.15;
-    const currentMs = typeof player.getCurrentTimeMs === "function" ? player.getCurrentTimeMs() : 0;
-    
-    // Mapeamos el tiempo actual de reproducción al índice del mapa de bytes extraídos
-    // Al remuestrear a 100Hz en ffmpeg, cada índice equivale aproximadamente a 10ms
-    const mapIndex = Math.floor(currentMs / 10);
-    const baseIntensity = trackAudioMap[clamp(mapIndex, 0, trackAudioMap.length - 1)] || 15;
+    // Avanzamos la velocidad de las barras
+    animationFrame += 0.12;
 
     for (let i = 0; i < barsCount; i++) {
-      const n = i / (barsCount - 1 || 1);
+      // Posición normalizada de la barra en la caja (0 a 1)
+      const position = i / (barsCount - 1 || 1);
 
-      // Zonas reales: Graves (izq), Medios (centro), Agudos (der)
-      const bassZone = Math.exp(-Math.pow((n - 0.15) / 0.16, 2));
-      const midsZone = Math.exp(-Math.pow((n - 0.50) / 0.22, 2));
-      const trebleZone = Math.exp(-Math.pow((n - 0.85) / 0.16, 2));
+      // Delimitación armónica: emulamos Graves (izq), Medios (centro) y Agudos (der)
+      const bassZone = Math.exp(-Math.pow((position - 0.15) / 0.18, 2));
+      const midsZone = Math.exp(-Math.pow((position - 0.50) / 0.25, 2));
+      const trebleZone = Math.exp(-Math.pow((position - 0.85) / 0.18, 2));
 
-      // Añadimos modulaciones rítmicas para expandir los picos de forma orgánica
-      const waveFactor = Math.sin(currentAnimationTick + i * 0.25);
-      let amplitude = baseIntensity;
+      // Ondas procedimentales desfasadas matemáticamente
+      const f1 = Math.sin(animationFrame * 1.5 + i * 0.2) * 35 + 45;
+      const f2 = Math.cos(animationFrame * 2.2 - i * 0.4) * 30 + 40;
+      const f3 = Math.sin(animationFrame * 3.5 + i * 0.6) * 20 + 30;
 
-      if (bassZone > 0.4) {
-        amplitude *= (1.3 + waveFactor * 0.25) * bassZone;
-      } else if (midsZone > 0.4) {
-        amplitude *= (1.0 + Math.cos(currentAnimationTick * 1.2 + i) * 0.2) * midsZone;
-      } else if (trebleZone > 0.4) {
-        amplitude *= (0.7 + Math.sin(currentAnimationTick * 2.0 - i) * 0.35) * trebleZone;
-      } else {
-        amplitude *= 0.2;
+      let amplitude = (f1 * bassZone) + (f2 * midsZone) + (f3 * trebleZone);
+
+      // Añadimos picos intermitentes aleatorios en el canal de graves para dar dinamismo
+      if (i % 6 === 0) {
+        amplitude += Math.sin(animationFrame * 0.8) * 15 * bassZone;
       }
 
-      const targetValue = clamp(Math.floor(amplitude), 3, 100);
+      const targetValue = clamp(Math.floor(amplitude), 4, 95);
 
-      // Filtro de inercia balística (Caída suave y amortiguada)
+      // Suavizado balístico tradicional para evitar movimientos toscos o parpadeos
       if (targetValue > spectrum[i]) {
-        spectrum[i] = Math.floor(targetValue * 0.85 + spectrum[i] * 0.15);
+        spectrum[i] = Math.floor(targetValue * 0.75 + spectrum[i] * 0.25);
       } else {
-        spectrum[i] = Math.max(0, Math.floor(spectrum[i] * 0.76));
+        spectrum[i] = Math.max(0, Math.floor(spectrum[i] * 0.80));
       }
 
-      // Caída lenta del pico flotante analógico
+      // Sistema de caída analógica del punto de pico superior (Peak Hold)
       if (spectrum[i] > peakHold[i]) {
         peakHold[i] = spectrum[i];
       } else {
-        peakHold[i] = Math.max(0, peakHold[i] - 2.0);
+        peakHold[i] = Math.max(0, peakHold[i] - 1.6);
       }
     }
   }
@@ -123,6 +81,7 @@ export function createVisualizer({ ui, player }) {
     const lines = [];
     const maxVal = 100;
 
+    // Dibujamos la cuadrícula de arriba hacia abajo
     for (let h = height; h > 0; h--) {
       let line = "  ";
       for (let i = 0; i < barsCount; i++) {
@@ -169,7 +128,8 @@ export function createVisualizer({ ui, player }) {
         peakHold = new Array(calculatedWidth).fill(0);
       }
 
-      processAudioToBars(calculatedWidth);
+      // Corremos las ondas matemáticas limpias
+      generateProceduralWaves(calculatedWidth);
 
       const asciiVisualizer = getVisualizerSpectrum(7, calculatedWidth);
       ui.setVisualizer(asciiVisualizer);
@@ -188,7 +148,7 @@ export function createVisualizer({ ui, player }) {
   function start() {
     if (uiInterval) clearInterval(uiInterval);
     render();
-    uiInterval = setInterval(() => { render(); }, 33); // 30 FPS fluidos
+    uiInterval = setInterval(() => { render(); }, 33); // 30 FPS fijos y eficientes
   }
 
   function stop() {
@@ -198,13 +158,11 @@ export function createVisualizer({ ui, player }) {
     }
     spectrum.fill(0);
     peakHold.fill(0);
-    trackAudioMap = [];
   }
 
   return { 
     start, 
     stop, 
-    render,
-    analyzeTrackAsync
+    render
   };
 }

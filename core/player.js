@@ -4,7 +4,7 @@ import path from "path";
 import * as mm from "music-metadata";
 import sharp from "sharp";
 
-export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = null }) {
+export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let playlist = [...initialPlaylist];
   let index = 0;
   let audioProcess = null;
@@ -152,12 +152,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
       playing = true;
       startedAt = Date.now();
 
-      // Disparamos el análisis asíncrono sin el "await" bloqueante para que no congele la interfaz
-      if (visualizer && typeof visualizer.analyzeTrackAsync === "function") {
-        visualizer.analyzeTrackAsync(track.path);
-      }
-
-      // Reproducción directa e inmediata
       audioProcess = spawn(
         "mpv",
         [
@@ -175,12 +169,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
         }
       );
 
-      audioProcess.on("spawn", () => {
-        if (visualizer) visualizer.start();
-      });
-
       audioProcess.on("exit", (code) => {
-        if (visualizer) visualizer.stop();
         if (playing && !isManualKill && code === 0) {
           next();
         } else {
@@ -206,7 +195,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
   function stop() {
     isManualKill = true; 
     cleanup();
-    if (visualizer) visualizer.stop();
     ui.clearVisual(); 
     ui.setPlaylist(playlist, index); 
     if (ui.render) ui.render();
@@ -246,24 +234,15 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
     if (!playing || !startedAt) return 0;
     return Math.floor((Date.now() - startedAt) / 1000);
   }
-
-  function getCurrentTimeMs() {
-    if (!playing || !startedAt) return 0;
-    return Date.now() - startedAt;
-  }
   
   function getDuration() {
     const track = getTrack();
     return track && track.duration ? track.duration : 180;
   }
 
-  function setVisualizer(visInstance) {
-    visualizer = visInstance;
-  }
-
   return {
     play, stop, toggle, next, prev, isPlaying, getTrack,
-    getCurrentIndex, getTracks, getCurrentTime, getCurrentTimeMs, getDuration,
-    loadTracks, getVolume, isLoop, isShuffle, getEQ, setVisualizer
+    getCurrentIndex, getTracks, getCurrentTime, getDuration,
+    loadTracks, getVolume, isLoop, isShuffle, getEQ
   };
 }

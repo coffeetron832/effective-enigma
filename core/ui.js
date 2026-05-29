@@ -25,25 +25,13 @@ export function createUI() {
     top: 0,
     left: "30%",
     width: "70%",
-    height: "30%",
+    height: "70%", // Expandido para ocupar de forma limpia el hueco superior
     label: " [ NOW PLAYING ] ",
     border: { type: "line" },
     style: { border: { fg: "green" } },
-    padding: { top: 0, left: 2, right: 2 },
+    padding: { top: 1, left: 2, right: 2 },
     scrollable: true,
     alwaysScroll: true
-  });
-
-  const visualizerBox = blessed.box({
-    parent: screen,
-    top: "30%",
-    left: "30%",
-    width: "70%",
-    height: "40%",
-    label: " [ REALTIME SPECTRUM ] ",
-    border: { type: "line" },
-    style: { border: { fg: "magenta" } },
-    padding: { left: 2 }
   });
 
   const playlistBox = blessed.box({
@@ -76,9 +64,6 @@ export function createUI() {
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
 
-  // CORRECCIÓN: Eliminamos el event listener intrusivo de C-c para permitir que index.js maneje el ciclo de cierre de mpv.
-
-  // Guardamos una referencia única al listener de teclado para evitar duplicados
   let globalKeypressListener = null;
 
   return {
@@ -116,20 +101,22 @@ export function createUI() {
           displayTrackName = displayTrackName.slice(0, maxTextLength - 3) + "...";
         }
 
+        // Renderizado vertical holgado aprovechando el nuevo espacio
         nowPlayingBox.setContent(
-          `{bold}Track:{/bold} ${displayTrackName}\n` +
-          `Progress: [${progressBar}] ${safePercent}%\n` +
-          `Time:     ${currentTimeStr} / ${totalTimeStr}`
+          `\n` +
+          ` {bold}Track:{/bold}     ${displayTrackName}\n\n` +
+          ` {bold}Progress:{/bold}  [${progressBar}] ${safePercent}%\n\n` +
+          ` {bold}Time:{/bold}      ${currentTimeStr} / ${totalTimeStr}`
         );
       } catch (e) {
         nowPlayingBox.setContent(`{bold}Track:{/bold} ${trackName}\nTime: ${current} / ${total}`);
       }
-      // CORRECCIÓN: Quitamos el renderizado síncrono automático
     },
 
-    setVisualizer: (asciiSpectrum) => {
-      visualizerBox.setContent(asciiSpectrum);
-    },
+    // Funciones stub pasivas para evitar que rompa index.js al llamarlas
+    setVisualizer: () => {},
+    clearVisual: () => {},
+    setWaveform: () => {},
 
     setAlbumArt: (asciiArt, album, year) => {
       albumBox.setContent(`${asciiArt}\n\n{yellow-fg}${album}{/}\n(${year})`);
@@ -137,8 +124,8 @@ export function createUI() {
 
     setVolumeState: (volume, loop, shuffle, eqMode) => {
       statusBox.setContent(
-        `• {bold}Volume:{/bold}   [${volume}%]\n` +
-        `• {bold}Loop:{/bold}     [${loop ? "ENABLED" : "DISABLED"}]\n` +
+        `• {bold}Volume:{/bold}    [${volume}%]\n` +
+        `• {bold}Loop:{/bold}      [${loop ? "ENABLED" : "DISABLED"}]\n` +
         `• {bold}Shuffle:{/bold}  [${shuffle ? "ON" : "OFF"}]\n` +
         `• {bold}Equalizer:{/bold} {green-fg}${eqMode}{/}`
       );
@@ -164,13 +151,6 @@ export function createUI() {
       nowPlayingBox.setLabel(" [ NOW PLAYING ] ");
     },
 
-    clearVisual: () => {
-      visualizerBox.setContent("\n\n         [ AUDIO PAUSED / STOPPED ]");
-    },
-
-    setWaveform: () => {},
-
-    // CORRECCIÓN: Manejo de entrada seguro y limpio sin fugas de memoria
     getInput: (callback) => {
       if (globalKeypressListener) {
         screen.removeListener("keypress", globalKeypressListener);
@@ -196,6 +176,6 @@ export function createUI() {
 
     focusInput: () => {},
     destroy: () => { screen.destroy(); },
-    render: () => { screen.render(); } // Ahora el renderizado es explícito y controlado desde fuera
+    render: () => { screen.render(); }
   };
 }
