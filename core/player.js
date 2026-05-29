@@ -59,11 +59,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
       } catch {}
       audioProcess = null;
     }
-    try {
-      if (fs.existsSync("/tmp/mascii-mpv.sock")) {
-        fs.unlinkSync("/tmp/mascii-mpv.sock");
-      }
-    } catch {}
     playing = false;
     startedAt = 0;
   }
@@ -157,8 +152,8 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
       playing = true;
       startedAt = Date.now();
 
-      // CORRECCIÓN: Levantamos mpv de forma normal (tiempo real) agregando un nodo IPC
-      // e inyectando un filtro de observación nativo ('computed') para el espectro.
+      // CORRECCIÓN: Volvemos a la ejecución estándar en tiempo real.
+      // Cambiamos stdio a 'pipe' en el canal stderr para mantener enganchado a mpv sin colgar la CPU.
       audioProcess = spawn(
         "mpv",
         [
@@ -167,20 +162,27 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
           "--really-quiet",
           "--keep-open=no",
           `--volume=${currentVolume}`,
-          "--ao=pulse,alsa",
-          // Filtro nativo que calcula la amplitud de la onda en tiempo real sin desviar el flujo de salida
-          "--af=lavfi=[asplit[out1][out2],[out2]asubboost,atintegral,asplit[vis][out3],[vis]volume=0[muted]]",
-          "--input-ipc-server=/tmp/mascii-mpv.sock",
+          "--ao=pulse,alsa", 
           track.path
         ],
         {
           detached: false,
-          stdio: ["ignore", "ignore", "ignore"] // Ignoramos pipes directos para evitar cierres prematuros
+          stdio: ["ignore", "ignore", "pipe"] 
         }
       );
 
+      // Mantenemos vivo el flujo de mpv absorbiendo el canal stderr de forma pasiva
+      audioProcess.stderr.on("data", () => {});
+
+      // Sincronizamos el arranque del visualizador con el spawn del proceso real
+      audioProcess.on("spawn", () => {
+        if (visualizer) visualizer.start();
+      });
+
       audioProcess.on("exit", (code) => {
-        if (playing && !isManualKill) {
+        if (visualizer) visualizer.stop();
+        // Solo avanza si el proceso terminó por vejez (code 0) y no por un stop() manual
+        if (playing && !isManualKill && code === 0) {
           next();
         } else {
           if (ui.render) ui.render();
@@ -205,6 +207,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
   function stop() {
     isManualKill = true; 
     cleanup();
+    if (visualizer) visualizer.stop();
     ui.clearVisual(); 
     ui.setPlaylist(playlist, index); 
     if (ui.render) ui.render();
