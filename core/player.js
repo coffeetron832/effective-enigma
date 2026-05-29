@@ -55,7 +55,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
     if (audioProcess) {
       try {
         audioProcess.removeAllListeners("exit");
-        audioProcess.stdout?.removeAllListeners("data");
         audioProcess.kill("SIGKILL"); 
       } catch {}
       audioProcess = null;
@@ -153,32 +152,28 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
       playing = true;
       startedAt = Date.now();
 
-      // SOLUCIÓN AL SILENCIO: Quitamos el volcado masivo a archivo externo que bloqueaba ALSA/Pulse.
-      // Ahora mpv corre 100% nativo y libre. Usamos los logs nativos de estado de reproducción como trigger dinámico de volumen.
+      // Disparamos el análisis asíncrono sin el "await" bloqueante para que no congele la interfaz
+      if (visualizer && typeof visualizer.analyzeTrackAsync === "function") {
+        visualizer.analyzeTrackAsync(track.path);
+      }
+
+      // Reproducción directa e inmediata
       audioProcess = spawn(
         "mpv",
         [
           "--no-video",
           "--no-terminal",
+          "--really-quiet",
           "--keep-open=no",
           `--volume=${currentVolume}`,
           "--ao=pulse,alsa",
-          "--term-status-msg=AV: ${time-pos} / ${duration} (${percent-pos}%) A-V:0.000",
           track.path
         ],
         {
           detached: false,
-          stdio: ["ignore", "pipe", "ignore"] // Escuchamos el stdout de texto estándar, súper ligero
+          stdio: "ignore"
         }
       );
-
-      // Cada vez que mpv cambie de milisegundo, enviamos una señal de "tick" real al visualizador
-      audioProcess.stdout.on("data", chunk => {
-        const dataStr = chunk.toString();
-        if (dataStr.includes("AV:") && visualizer && typeof visualizer.injectAudioTick === "function") {
-          visualizer.injectAudioTick();
-        }
-      });
 
       audioProcess.on("spawn", () => {
         if (visualizer) visualizer.start();
@@ -251,6 +246,11 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
     if (!playing || !startedAt) return 0;
     return Math.floor((Date.now() - startedAt) / 1000);
   }
+
+  function getCurrentTimeMs() {
+    if (!playing || !startedAt) return 0;
+    return Date.now() - startedAt;
+  }
   
   function getDuration() {
     const track = getTrack();
@@ -263,7 +263,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui, visualizer = 
 
   return {
     play, stop, toggle, next, prev, isPlaying, getTrack,
-    getCurrentIndex, getTracks, getCurrentTime, getDuration,
+    getCurrentIndex, getTracks, getCurrentTime, getCurrentTimeMs, getDuration,
     loadTracks, getVolume, isLoop, isShuffle, getEQ, setVisualizer
   };
 }
