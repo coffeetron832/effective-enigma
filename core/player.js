@@ -1,4 +1,4 @@
-import { spawn, execSync } from "child_process";
+import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import * as mm from "music-metadata";
@@ -10,16 +10,12 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let audioProcess = null;
   let playing = false;
   let startedAt = 0;
+  let isManualKill = false; 
 
   let currentVolume = 80;
   let loopState = false;
   let shuffleState = false;
   let eqMode = "ROCK";
-
-  let audioWaveform = new Array(30).fill(0); 
-  
-  // Definimos la ruta para la tubería FIFO temporal
-  const fifoPath = path.resolve("./music_wave_fifo");
 
   loadTracks();
 
@@ -54,44 +50,23 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     return playlist[index];
   }
 
-  function setupFifo() {
-    // Si la tubería FIFO ya existe, la borramos para evitar bloqueos de buffer residuales
-    if (fs.existsSync(fifoPath)) {
-      try { fs.unlinkSync(fifoPath); } catch {}
-    }
-    // Creamos una tubería con nombre nativa en Linux usando mkfifo
-    try {
-      execSync(`mkfifo "${fifoPath}"`);
-    } catch (err) {
-      ui.appendLog(`{red-fg}FIFO Error:{/red-fg} ${err.message}`);
-    }
-  }
-
   function cleanup() {
     if (audioProcess) {
       try {
-        audioProcess.isKilledManually = true; 
         audioProcess.kill("SIGTERM");
       } catch {}
       audioProcess = null;
     }
     playing = false;
     startedAt = 0;
-    audioWaveform.fill(0);
-    if (ui.setWaveform) ui.setWaveform(audioWaveform);
-
-    // Borramos el archivo FIFO temporal
-    if (fs.existsSync(fifoPath)) {
-      try { fs.unlinkSync(fifoPath); } catch {}
-    }
   }
 
   async function updateAlbumArtMetadata(track, ui) {
     const defaultArt = [
       "      .:::::.",
       "    .:::::::::.",
-      "   :::::::::::::",
-      "   ░░░░░░░░░░░░░",
+      "    :::::::::::::",
+      "    ░░░░░░░░░░░░░",
       " ─────────────────",
       "  ───────────────",
       "   ─────────────"
@@ -105,6 +80,8 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       if (metadata.common.album) albumName = metadata.common.album;
       if (metadata.common.year) year = String(metadata.common.year);
       if (metadata.common.artist) track.artist = metadata.common.artist;
+
+      ui.setFileInfo(metadata.container || "MPEG Layer 3", `${Math.round((metadata.format.bitrate || 320000) / 1000)}kbps`);
 
       const picture = metadata.common.picture && metadata.common.picture[0];
 
@@ -143,6 +120,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     } catch {
       ui.setAlbumArt(defaultArt, albumName, year);
     }
+    if (ui.render) ui.render();
   }
 
   function play() {
@@ -153,23 +131,19 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     }
 
     cleanup();
-    setupFifo(); // Preparamos el puente FIFO
+    isManualKill = false; 
 
     try {
       playing = true;
       startedAt = Date.now();
 
-      // Lanzamos mpv apuntando la salida de audio hacia el archivo FIFO en lugar de fd://3
-      const currentProcess = spawn(
+      audioProcess = spawn(
         "mpv",
         [
           "--no-video",
           "--no-terminal",
           "--keep-open=no",
-          `--audio-to-file=${fifoPath}`,
-          "--oformat=s16le",  
-          "--oaudio-channels=mono",
-          "--oaudio-speed=44100",
+          `--volume=${currentVolume}`,
           track.path
         ],
         {
@@ -178,64 +152,22 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
         }
       );
 
-      audioProcess = currentProcess;
-
-      // Abrimos el flujo de lectura asíncrono sobre el archivo FIFO desde Node.js
-      const audioStream = fs.createReadStream(fifoPath);
-
-      audioStream.on("data", chunk => {
-        if (!playing) return;
-        
-        try {
-          const samples = new Int16Array(chunk.buffer, chunk.byteOffset, chunk.byteLength / 2);
-          if (samples.length === 0) return;
-
-          const numBars = audioWaveform.length;
-          const samplesPerBar = Math.floor(samples.length / numBars) || 1;
-
-          for (let i = 0; i < numBars; i++) {
-            let sumSquares = 0;
-            const start = i * samplesPerBar;
-            const end = Math.min(start + samplesPerBar, samples.length);
-
-            for (let j = start; j < end; j++) {
-              sumSquares += samples[j] * samples[j];
-            }
-
-            const rms = Math.sqrt(sumSquares / (end - start || 1));
-            const normalizedHeight = Math.min(Math.floor((rms / 4000) * 8), 8);
-            
-            audioWaveform[i] = Math.max(normalizedHeight, audioWaveform[i] - 1);
-          }
-
-          if (typeof ui.setWaveform === "function") {
-            ui.setWaveform(audioWaveform);
-          }
-        } catch (err) {}
-      });
-
-      currentProcess.stderr.on("data", data => {
+      audioProcess.stderr.on("data", data => {
         const text = String(data || "").trim();
         if (text.includes("error") || text.includes("fatal")) {
           ui.appendLog(`{red-fg}mpv error:{/red-fg} ${text.slice(0, 30)}`);
         }
       });
 
-      currentProcess.on("exit", (code) => {
-        const wasKilled = currentProcess.isKilledManually;
-
-        if (currentProcess === audioProcess) {
-          audioProcess = null;
-        }
-
-        if (playing && !wasKilled) {
+      audioProcess.on("exit", () => {
+        if (playing && !isManualKill) {
           next();
         } else {
-          ui.render();
+          if (ui.render) ui.render();
         }
       });
 
-      currentProcess.on("error", error => {
+      audioProcess.on("error", error => {
         playing = false;
         ui.appendLog(`{red-fg}Failed to launch mpv:{/red-fg} ${error.message}`);
       });
@@ -251,9 +183,11 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   }
 
   function stop() {
+    isManualKill = true; 
     cleanup();
     ui.clearVisual(); 
     ui.setPlaylist(playlist, index); 
+    if (ui.render) ui.render();
   }
 
   function toggle() {
@@ -262,6 +196,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
   function next() {
     if (!playlist.length) return;
+    isManualKill = true;
     stop();
     index++;
     if (index >= playlist.length) index = 0;
@@ -270,6 +205,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
   function prev() {
     if (!playlist.length) return;
+    isManualKill = true;
     stop();
     index--;
     if (index < 0) index = playlist.length - 1;

@@ -3,350 +3,177 @@ import blessed from "blessed";
 export function createUI() {
   const screen = blessed.screen({
     smartCSR: true,
-    title: "ULTRA ASCII AUDIO PLAYER",
-    fullUnicode: true,
-    dockBorders: true,
-    style: {
-      bg: "black",
-      fg: "green", // Color de texto predeterminado verde retro
-    },
+    title: "MASCII Player 2026",
+    dockBorders: true
   });
 
-  screen.key(["C-c"], () => process.exit(0));
-
-  let playlistContent = "";
-  let albumArtContent = "";
-  let inputFocused = false;
-
-  // ==========================================
-  // -- Definición de las cajas del layout ---
-  // ==========================================
-
-  const headerBox = blessed.box({
+  const albumBox = blessed.box({
+    parent: screen,
     top: 0,
     left: 0,
-    width: "100%",
-    height: 1,
-    content: "ULTRA ASCII AUDIO PLAYER",
+    width: "30%",
+    height: "70%",
+    label: " [ ALBUM ART ] ",
+    border: { type: "line" },
+    style: { border: { fg: "cyan" } },
     align: "center",
-    style: {
-      fg: "green",
-    },
+    valign: "middle"
   });
 
   const nowPlayingBox = blessed.box({
-    top: 1,
-    left: 0,
-    width: "100%",
-    height: 2,
-    content: "NOW PLAYING: [ ] 00:00 / 00:00 (0%)\nTRACK: [N/A]",
-    style: {
-      fg: "green",
-    },
+    parent: screen,
+    top: 0,
+    left: "30%",
+    width: "70%",
+    height: "30%",
+    label: " [ NOW PLAYING ] ",
+    border: { type: "line" },
+    style: { border: { fg: "green" } },
+    padding: { top: 1, left: 2 }
   });
 
-  // Caja del espectro (central superior)
   const visualizerBox = blessed.box({
-    top: 3,
-    left: 0,
-    width: "100%",
-    height: 10,
-    content: "Visualizador de espectro ASCII (se actualizará dinámicamente)",
-    style: {
-      fg: "green",
-    },
+    parent: screen,
+    top: "30%",
+    left: "30%",
+    width: "70%",
+    height: "40%",
+    label: " [ REALTIME SPECTRUM ] ",
+    border: { type: "line" },
+    style: { border: { fg: "magenta" } },
+    padding: { left: 2 }
   });
 
   const playlistBox = blessed.box({
-    top: 13,
+    parent: screen,
+    top: "70%",
     left: 0,
-    width: "50%",
-    height: "100%-16",
-    content: playlistContent,
-    border: {
-      type: "line",
-    },
-    label: " PLAYLIST: ",
-    scrollable: true,
-    keys: true,
-    mouse: true,
-    style: {
-      fg: "green",
-      border: {
-        fg: "green",
-      },
-      selected: {
-        bg: "white",
-        fg: "black",
-      },
-    },
+    width: "60%",
+    height: "30%",
+    label: " [ TRACKLIST ] ",
+    border: { type: "line" },
+    style: { border: { fg: "yellow" } }
   });
 
-  const fileInfoBox = blessed.box({
-    top: 13,
-    left: "50%",
-    width: "50%",
-    height: 3,
-    content: "MPEG Layer 3, 320kbps",
-    border: {
-      type: "line"
-    },
-    label: " FILE INFO: ",
-    style: {
-      fg: "green",
-      border: {
-        fg: "green"
-      }
-    },
+  const statusBox = blessed.box({
+    parent: screen,
+    top: "70%",
+    left: "60%",
+    width: "40%",
+    height: "30%",
+    label: " [ AUDIO CONFIG ] ",
+    border: { type: "line" },
+    style: { border: { fg: "white" } },
+    padding: { top: 1, left: 2 }
   });
 
-  const albumArtBox = blessed.box({
-    top: 16,
-    left: "50%",
-    width: "50%",
-    height: "100%-19",
-    content: albumArtContent,
-    border: {
-      type: "line"
-    },
-    label: " ALBUM ART: ",
-    style: {
-      fg: "green",
-      border: {
-        fg: "green"
-      }
-    },
-  });
-
-  const volumeBox = blessed.box({
-    top: "100%-4",
-    left: 0,
-    width: "100%",
-    height: 1,
-    content: "VOL: 100% [==========] | LOOP: OFF | RAND: ON | EQ: FLAT",
-    style: {
-      fg: "green",
-    },
-  });
-
-  const input = blessed.textbox({
-    top: "100%-3",
-    left: 0,
-    width: "100%",
-    height: 3,
-    label: " (H for Help, Q to Quit, N Next, P Prev, S Stop, L Loop, R Shuffle) ",
-    border: {
-      type: "line",
-    },
-    inputOnFocus: true,
-    keys: true,
-    mouse: true,
-    padding: {
-      left: 1,
-    },
-    style: {
-      fg: "green",
-      border: {
-        fg: "green",
-      },
-      focus: {
-        border: {
-          fg: "green",
-        },
-      },
-    },
-  });
-
-  // ==========================================
-  // -- Añadir elementos a la pantalla --------
-  // ==========================================
-
-  screen.append(headerBox);
-  screen.append(nowPlayingBox);
-  screen.append(visualizerBox);
-  screen.append(playlistBox);
-  screen.append(fileInfoBox);
-  screen.append(albumArtBox);
-  screen.append(volumeBox);
-  screen.append(input);
-
-  // ==========================================
-  // -- Funciones de ayuda y utilidades -------
-  // ==========================================
-
-  function stripMarkup(text = "") {
-    return String(text)
-      .replace(/\{\/?[^}]+\}/g, "")
-      .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
-  }
-
-  // ==========================================
-  // -- Métodos expuestos de actualización ----
-  // ==========================================
-
-  function setNowPlaying(trackName, currentTime, totalTime, percentage) {
-    nowPlayingBox.setContent(
-      `NOW PLAYING: [>] ${currentTime} / ${totalTime} (${percentage}%)\nTRACK: [${trackName}]`
-    );
-    screen.render();
-  }
-
-  function setPlaylist(trackList, selectedIndex) {
-    playlistContent = trackList
-      .map((track, index) => {
-        const prefix = index === selectedIndex ? `> ` : `  `;
-        return `${prefix}${index + 1}. [${track.played ? "X" : " "}] ${track.name} ${
-          track.duration
-        }`;
-      })
-      .join("\n");
-    playlistBox.setContent(playlistContent);
-    if (typeof playlistBox.select === "function") {
-      playlistBox.select(selectedIndex);
-    }
-    screen.render();
-  }
-
-  function setFileInfo(codec, bitRate) {
-    fileInfoBox.setContent(`${codec}, ${bitRate}`);
-    screen.render();
-  }
-
-  function setAlbumArt(asciiArt, albumName, year) {
-    albumArtBox.setContent(asciiArt);
-    albumArtBox.setLabel(` ALBUM ART: [${albumName} - ${year}] `);
-    screen.render();
-  }
-
-  function setVisualizer(asciiSpectrogram) {
-    visualizerBox.setContent(asciiSpectrogram);
-    screen.render();
-  }
-
-  // CORRECCIÓN CLAVE: Inyección real de datos de ondas PCM mapeada en barras verticales ASCII
-  function setWaveform(waveData) {
-    const barChars = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-    
-    // Convertimos los niveles numéricos en caracteres bloques y los espaciamos elegantemente
-    const asciiWave = waveData
-      .map(height => {
-        const index = Math.min(Math.max(height, 0), 8);
-        return barChars[index];
-      })
-      .join(" ");
-
-    // Centramos verticalmente las ondas dentro de las 10 líneas de visualizerBox
-    const paddingLines = "\n".repeat(4);
-    visualizerBox.setContent(`${paddingLines}   {green-fg}${asciiWave}{/green-fg}`);
-    screen.render();
-  }
-
-  function setVolumeState(volume, loop, rand, eq) {
-    const volBar = "=".repeat(Math.floor(volume / 10)) + "-".repeat(10 - Math.floor(volume / 10));
-    volumeBox.setContent(
-      `VOL: ${volume}% [${volBar}] | LOOP: ${loop ? "ON" : "OFF"} | RAND: ${
-        rand ? "ON" : "OFF"
-      } | EQ: ${eq}`
-    );
-    screen.render();
-  }
-
-  function append(content = "") {
-    if (!content) return;
-    visualizerBox.setContent(content);
-    screen.render();
-  }
-
-  function set(content = "") {
-    if (content) {
-      visualizerBox.setContent(content);
-    }
-    screen.render();
-  }
-
-  function appendLog(message = "") {
-    if (message) {
-      fileInfoBox.setContent(String(message));
-    }
-    screen.render();
-  }
-
-  function clearLog() {
-    fileInfoBox.setContent("");
-    screen.render();
-  }
-
-  function clearVisual() {
-    visualizerBox.setContent("");
-    screen.render();
-  }
-
-  function focusInput() {
-    inputFocused = true;
-    input.setValue("");
-    input.value = "";
-
-    if (screen.focused !== input) {
-      input.focus();
-    }
-    screen.render();
-  }
-
-  function getInput() {
-    return input;
-  }
-
-  function getSize() {
-    return {
-      width: screen.width,
-      height: screen.height,
-    };
-  }
-
-  function destroy() {
-    screen.destroy();
-  }
-
-  // ==========================================
-  // -- Eventos de Escucha --------------------
-  // ==========================================
-
-  screen.on("resize", () => {
-    screen.render();
-  });
-
-  input.on("focus", () => {
-    inputFocused = true;
-  });
-
-  input.on("blur", () => {
-    inputFocused = false;
-    screen.render();
+  screen.key(["C-c"], () => {
+    return process.exit(0);
   });
 
   return {
-    screen,
-    playlistBox, 
-    visualBox: visualizerBox, 
-    input,
-    set,
-    append,
-    setNowPlaying,
-    setPlaylist,
-    setFileInfo,
-    setAlbumArt,
-    setVisualizer,
-    setWaveform, // Ahora player.js puede llamarlo sin provocar fallos de ejecución
-    setVolumeState,
-    appendLog,
-    clearLog,
-    clearVisual,
-    render: () => {
+    screen: screen,
+
+    getSize: () => ({
+      width: screen.width,
+      height: screen.height
+    }),
+
+    setNowPlaying: (trackName, current, total, percent) => {
+      try {
+        // CORRECCIÓN CRUCIAL: Si width es un string (ej: "70%"), calculamos el ancho basado en la pantalla real
+        const computedWidth = typeof nowPlayingBox.width === "number" 
+          ? nowPlayingBox.width 
+          : Math.floor(screen.width * 0.7);
+
+        const barWidth = Math.max(10, computedWidth - 25);
+        
+        let safePercent = parseInt(percent);
+        if (isNaN(safePercent) || safePercent < 0) safePercent = 0;
+        if (safePercent > 100) safePercent = 100;
+
+        const barLength = Math.floor(barWidth * (safePercent / 100)) || 0;
+        const safeBarLength = Math.max(0, Math.min(barWidth, barLength));
+        const remainingLength = Math.max(0, barWidth - safeBarLength);
+
+        const progressBar = "█".repeat(safeBarLength) + "░".repeat(remainingLength);
+        
+        nowPlayingBox.setContent(
+          `{bold}Track:{/bold} ${trackName}\n\n` +
+          `Progress: [${progressBar}] ${safePercent}%\n` +
+          `Time:     ${current} / ${total}`
+        );
+      } catch (e) {
+        nowPlayingBox.setContent(`{bold}Track:{/bold} ${trackName}\n\nTime: ${current} / ${total}`);
+      }
       screen.render();
     },
-    focusInput,
-    getInput,
-    getSize,
-    destroy,
+
+    setVisualizer: (asciiSpectrum) => {
+      visualizerBox.setContent(asciiSpectrum);
+      screen.render();
+    },
+
+    setAlbumArt: (asciiArt, album, year) => {
+      albumBox.setContent(`${asciiArt}\n\n{yellow-fg}${album}{/}\n(${year})`);
+      screen.render();
+    },
+
+    setVolumeState: (volume, loop, shuffle, eqMode) => {
+      statusBox.setContent(
+        `• {bold}Volume:{/bold}   [${volume}%]\n` +
+        `• {bold}Loop:{/bold}     [${loop ? "ENABLED" : "DISABLED"}]\n` +
+        `• {bold}Shuffle:{/bold}  [${shuffle ? "ON" : "OFF"}]\n` +
+        `• {bold}Equalizer:{/bold} {green-fg}${eqMode}{/}`
+      );
+      screen.render();
+    },
+
+    setPlaylist: (playlist, currentIndex) => {
+      const items = playlist.map((track, idx) => {
+        return idx === currentIndex ? `-> * ${track.name}` : `   ${track.name}`;
+      }).slice(Math.max(0, currentIndex - 2), currentIndex + 3);
+
+      playlistBox.setContent(items.join("\n"));
+      screen.render();
+    },
+
+    setFileInfo: (codec, bitrate) => {
+      playlistBox.setLabel(` [ PLAYLIST - ${codec} @ ${bitrate} ] `);
+      screen.render();
+    },
+
+    appendLog: (msg) => {
+      nowPlayingBox.setContent(msg);
+      screen.render();
+    },
+
+    clearLog: () => {
+      nowPlayingBox.setContent("");
+      screen.render();
+    },
+
+    clearVisual: () => {
+      visualizerBox.setContent("\n\n         [ AUDIO PAUSED / STOPPED ]");
+      screen.render();
+    },
+
+    setWaveform: () => {},
+
+    getInput: (callback) => {
+      screen.on("keypress", (ch, key) => {
+        callback(ch, key);
+      });
+      return {
+        removeAllListeners: () => {},
+        setValue: () => {},
+        focusInput: () => {}
+      };
+    },
+
+    focusInput: () => {},
+    destroy: () => { screen.destroy(); },
+    render: () => { screen.render(); }
   };
 }
+

@@ -2,24 +2,18 @@ import fs from "fs";
 import path from "path";
 
 export function createCommands({ ui, player }) {
-  const input = ui.getInput();
   let isLocked = false;
 
-  // Redirige los logs generales a la caja de información del archivo (File Info / Log)
+  // Redirige las salidas de texto a la interfaz visual
   function log(message = "") {
     ui.appendLog(message);
-  }
-
-  function clearInput() {
-    input.setValue("");
-    input.value = "";
   }
 
   function importPath(targetPath) {
     const trimmedPath = String(targetPath || "").trim();
 
     if (!trimmedPath) {
-      log(`{red-fg}Missing path{/red-fg}\nUse: load <path>`);
+      log(`{red-fg}Missing path{/red-fg}\nUse keyboard shortcuts or verify folder layout.`);
       return;
     }
 
@@ -67,14 +61,13 @@ export function createCommands({ ui, player }) {
 
     log(`{green-fg}Imported ${copied} file(s){/green-fg} to ./music`);
     
-    // Si el reproductor tiene un método para recargar las pistas locales, lo llamamos aquí
     if (typeof player.loadTracks === "function") {
       player.loadTracks();
       updatePlaylistUI();
     }
   }
 
-  // Sincroniza visualmente la lista de reproducción en la interfaz
+  // Refresca la lista de canciones en el contenedor correspondiente
   function updatePlaylistUI() {
     if (typeof player.getTracks === "function" && typeof player.getCurrentIndex === "function") {
       const tracks = player.getTracks();
@@ -83,28 +76,15 @@ export function createCommands({ ui, player }) {
     }
   }
 
-  function runCommand(raw = "") {
+  function runCommand(commandName, args = []) {
     if (isLocked) return;
     isLocked = true;
 
-    const trimmed = String(raw || "").trim();
-    clearInput();
-
-    if (!trimmed) {
-      ui.render();
-      ui.focusInput();
-      isLocked = false;
-      return;
-    }
-
-    const parts = trimmed.split(/\s+/);
-    const command = parts[0].toLowerCase();
-    const args = parts.slice(1);
-
-    switch (command) {
+    switch (commandName) {
       case "play":
       case "pause":
       case "toggle":
+      case "space":
         if (typeof player.toggle === "function") player.toggle();
         break;
 
@@ -119,6 +99,7 @@ export function createCommands({ ui, player }) {
         break;
 
       case "stop":
+      case "s":
         if (typeof player.stop === "function") player.stop();
         break;
 
@@ -126,46 +107,55 @@ export function createCommands({ ui, player }) {
         importPath(args.join(" "));
         break;
 
-      case "help":
-      case "h":
-        log(`{green-fg}HELP:{/green-fg} play, pause, next, prev, stop, load <path>, clear, quit`);
-        break;
-
       case "clear":
         ui.clearVisual();
-        ui.clearLog();
         break;
 
       case "quit":
       case "exit":
       case "q":
-        ui.destroy();
+        if (ui.screen && typeof ui.screen.destroy === "function") {
+          ui.screen.destroy();
+        }
         process.exit(0);
         return;
 
       default:
-        log(`{red-fg}Unknown:{/red-fg} ${command}`);
+        // No genera salidas ruidosas en pulsaciones accidentales de teclado
+        break;
     }
 
-    // El timeout ahora se encarga de pintar la UI una vez que los punteros asíncronos cambiaron
     setTimeout(() => {
       updatePlaylistUI();
       isLocked = false;
-      clearInput();
-      ui.focusInput();
-      ui.render();
+      if (ui.screen && typeof ui.screen.render === "function") {
+        ui.screen.render();
+      }
     }, 60);
   }
 
-  // Remueve listeners previos para evitar fugas de memoria al reinicializar el módulo
-  input.removeAllListeners("submit");
+  // Limpieza defensiva del bus de eventos de la pantalla global de Blessed
+  if (ui.screen) {
+    ui.screen.removeAllListeners("keypress");
+  }
 
-  input.on("submit", value => {
-    runCommand(value);
+  // Interceptor reactivo de teclas directas (Atajos TUI estándar)
+  ui.getInput((ch, key) => {
+    const name = key ? key.name : "";
+
+    if (name === "space") {
+      runCommand("toggle");
+    } else if (name === "n") {
+      runCommand("next");
+    } else if (name === "p") {
+      runCommand("prev");
+    } else if (name === "s") {
+      runCommand("stop");
+    } else if (name === "q" || (key && key.ctrl && name === "c")) {
+      runCommand("quit");
+    }
   });
 
-  // Inicialización de la vista
-  clearInput();
-  ui.focusInput();
+  // Pintado inicial del Tracklist al arrancar
   updatePlaylistUI();
 }
