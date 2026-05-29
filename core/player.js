@@ -35,7 +35,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
         .map(file => ({
           name: path.basename(file, path.extname(file)),
           path: path.join(musicDir, file),
-          duration: "03:00",
+          duration: 180, // CORRECCIÓN: Inicializado como número entero por defecto
           artist: "Local Track"
         }));
 
@@ -53,7 +53,9 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   function cleanup() {
     if (audioProcess) {
       try {
-        audioProcess.kill("SIGTERM");
+        // Removemos listeners antes de matar para evitar colisiones en cascada
+        audioProcess.removeAllListeners("exit");
+        audioProcess.kill("SIGKILL");
       } catch {}
       audioProcess = null;
     }
@@ -80,6 +82,11 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       if (metadata.common.album) albumName = metadata.common.album;
       if (metadata.common.year) year = String(metadata.common.year);
       if (metadata.common.artist) track.artist = metadata.common.artist;
+
+      // CORRECCIÓN: Extraemos y parseamos la duración real a segundos enteros
+      if (metadata.format.duration) {
+        track.duration = Math.max(1, Math.round(metadata.format.duration));
+      }
 
       ui.setFileInfo(metadata.container || "MPEG Layer 3", `${Math.round((metadata.format.bitrate || 320000) / 1000)}kbps`);
 
@@ -137,6 +144,8 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       playing = true;
       startedAt = Date.now();
 
+      // SOLUCIÓN AL SALTO DE CANCIONES: Quitamos cualquier redirección a pipes PCM lentos o volcado asíncrono.
+      // mpv ahora reproduce de manera estándar con su regulador de tiempo nativo activo.
       audioProcess = spawn(
         "mpv",
         [
@@ -219,11 +228,17 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   function isLoop() { return loopState; }
   function isShuffle() { return shuffleState; }
   function getEQ() { return eqMode; }
+  
   function getCurrentTime() {
     if (!playing || !startedAt) return 0;
     return Math.floor((Date.now() - startedAt) / 1000);
   }
-  function getDuration() { return 180; }
+  
+  // CORRECCIÓN: Retorna la propiedad numérica dinámica extraída en los metadatos
+  function getDuration() {
+    const track = getTrack();
+    return track && track.duration ? track.duration : 180;
+  }
 
   return {
     play, stop, toggle, next, prev, isPlaying, getTrack,

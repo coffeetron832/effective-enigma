@@ -29,7 +29,9 @@ export function createUI() {
     label: " [ NOW PLAYING ] ",
     border: { type: "line" },
     style: { border: { fg: "green" } },
-    padding: { top: 1, left: 2 }
+    padding: { top: 0, left: 2, right: 2 }, // Reducido el padding superior
+    scrollable: true,                      // Permite scroll interno si la terminal es diminuta
+    alwaysScroll: true
   });
 
   const visualizerBox = blessed.box({
@@ -67,6 +69,13 @@ export function createUI() {
     padding: { top: 1, left: 2 }
   });
 
+  function formatSeconds(sec = 0) {
+    if (!isFinite(sec) || sec < 0) return "00:00";
+    const minutes = Math.floor(sec / 60);
+    const seconds = Math.floor(sec % 60);
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
   screen.key(["C-c"], () => {
     return process.exit(0);
   });
@@ -81,11 +90,11 @@ export function createUI() {
 
     setNowPlaying: (trackName, current, total, percent) => {
       try {
-        // CORRECCIÓN CRUCIAL: Si width es un string (ej: "70%"), calculamos el ancho basado en la pantalla real
         const computedWidth = typeof nowPlayingBox.width === "number" 
           ? nowPlayingBox.width 
           : Math.floor(screen.width * 0.7);
 
+        // Dejamos un margen seguro a la derecha para la barra
         const barWidth = Math.max(10, computedWidth - 25);
         
         let safePercent = parseInt(percent);
@@ -98,13 +107,25 @@ export function createUI() {
 
         const progressBar = "█".repeat(safeBarLength) + "░".repeat(remainingLength);
         
+        const currentTimeStr = formatSeconds(current);
+        const totalTimeStr = formatSeconds(total);
+
+        // CORRECCIÓN: Si el nombre del track excede el espacio visual seguro, lo truncamos con '...'
+        const maxTextLength = Math.max(20, computedWidth - 12);
+        let displayTrackName = trackName;
+        if (displayTrackName.length > maxTextLength) {
+          displayTrackName = displayTrackName.slice(0, maxTextLength - 3) + "...";
+        }
+
+        // CORRECCIÓN DE DISEÑO: Compactado estricto a un solo salto de línea simple (\n)
+        // Esto garantiza que entre en cualquier resolución vertical de terminal.
         nowPlayingBox.setContent(
-          `{bold}Track:{/bold} ${trackName}\n\n` +
+          `{bold}Track:{/bold} ${displayTrackName}\n` +
           `Progress: [${progressBar}] ${safePercent}%\n` +
-          `Time:     ${current} / ${total}`
+          `Time:     ${currentTimeStr} / ${totalTimeStr}`
         );
       } catch (e) {
-        nowPlayingBox.setContent(`{bold}Track:{/bold} ${trackName}\n\nTime: ${current} / ${total}`);
+        nowPlayingBox.setContent(`{bold}Track:{/bold} ${trackName}\nTime: ${current} / ${total}`);
       }
       screen.render();
     },
@@ -131,7 +152,7 @@ export function createUI() {
 
     setPlaylist: (playlist, currentIndex) => {
       const items = playlist.map((track, idx) => {
-        return idx === currentIndex ? `-> * ${track.name}` : `   ${track.name}`;
+        return idx === currentIndex ? `-> * ${track.name}` : `    ${track.name}`;
       }).slice(Math.max(0, currentIndex - 2), currentIndex + 3);
 
       playlistBox.setContent(items.join("\n"));
@@ -144,12 +165,12 @@ export function createUI() {
     },
 
     appendLog: (msg) => {
-      nowPlayingBox.setContent(msg);
+      nowPlayingBox.setLabel(` [ LOG: ${msg.replace(/\{.*?\}/g, "")} ] `);
       screen.render();
     },
 
     clearLog: () => {
-      nowPlayingBox.setContent("");
+      nowPlayingBox.setLabel(" [ NOW PLAYING ] ");
       screen.render();
     },
 
@@ -176,4 +197,3 @@ export function createUI() {
     render: () => { screen.render(); }
   };
 }
-

@@ -16,7 +16,6 @@ export function createVisualizer({ ui, player }) {
   }
 
   function createCavaConfig() {
-    // Intentamos usar 'pulse', si tu sistema migró a Pipewire, este es totalmente compatible con el fallback automático de origen.
     const content = `
 [general]
 bars = ${WAVEFORM_SIZE}
@@ -47,7 +46,6 @@ bar_delimiter = 0
     stopCava();
     const config = createCavaConfig();
 
-    // Forzamos las variables de entorno para que el subproceso de CAVA tenga acceso total a las sesiones locales de audio del usuario
     cavaProcess = spawn("cava", ["-p", config], {
       stdio: ["ignore", "pipe", "pipe"],
       env: { 
@@ -65,7 +63,6 @@ bar_delimiter = 0
     let buffer = Buffer.alloc(0);
 
     cavaProcess.stdout.on("data", chunk => {
-      // Si no se está reproduciendo música real, vaciamos el stream buffer para que no se acumule latencia retrasada
       if (!player.isPlaying()) {
         buffer = Buffer.alloc(0);
         return;
@@ -73,7 +70,6 @@ bar_delimiter = 0
 
       buffer = Buffer.concat([buffer, chunk]);
 
-      // Control preventivo de desbordamiento de búfer en memoria de terminal
       if (buffer.length > WAVEFORM_SIZE * 8) {
         buffer = buffer.subarray(buffer.length - (WAVEFORM_SIZE * 2));
       }
@@ -87,14 +83,12 @@ bar_delimiter = 0
           if (rawValue > spectrum[i]) {
             spectrum[i] = rawValue;
           } else {
-            // Efecto suavizado de caída (decay) de barras clásico retro
             spectrum[i] = Math.max(0, Math.floor(spectrum[i] * 0.75));
           }
         }
       }
     });
 
-    // Silenciamos logs innecesarios que saturan el stderr de la terminal principal
     cavaProcess.stderr.on("data", () => {});
   }
 
@@ -119,8 +113,6 @@ bar_delimiter = 0
     const isSpectrumEmpty = spectrum.length === 0 || spectrum.every(v => v === 0);
     let targetSpectrum = [...spectrum];
 
-    // MODO EMULADO: Si CAVA no recibe señal física del driver de audio, genera ondas matemáticas puras
-    // Esto garantiza que las barras NUNCA desaparezcan y el renderizado no colapse.
     if (isSpectrumEmpty) {
       fallbackFrame++;
       targetSpectrum = Array.from({ length: WAVEFORM_SIZE }, (_, i) => {
@@ -153,31 +145,21 @@ bar_delimiter = 0
     return lines.join("\n");
   }
 
-  function formatTime(sec = 0) {
-    if (!isFinite(sec) || sec < 0) return "00:00";
-    const minutes = Math.floor(sec / 60);
-    const seconds = Math.floor(sec % 60);
-    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-
   function render() {
     try {
       const track = player.getTrack();
       const current = typeof player.getCurrentTime === "function" ? player.getCurrentTime() : 0;
       const duration = typeof player.getDuration === "function" ? player.getDuration() : 180;
       
-      const currentTimeStr = formatTime(current);
-      const totalTimeStr = formatTime(duration);
-      
-      // Control estricto de porcentaje numérico real
       let percentage = duration > 0 ? Math.round((current / duration) * 100) : 0;
       if (isNaN(percentage) || percentage < 0) percentage = 0;
       if (percentage > 100) percentage = 100;
 
       const trackName = track ? `${track.artist || "Local Track"} - ${track.name}` : "No Track";
       
-      // Enviamos de forma síncrona los datos corregidos al frame del UI
-      ui.setNowPlaying(trackName, currentTimeStr, totalTimeStr, percentage);
+      // CORRECCIÓN: Quitamos el formateo de strings redundante (currentTimeStr, totalTimeStr)
+      // Pasamos las variables numéricas directas para que calce con la firma de ui.js
+      ui.setNowPlaying(trackName, current, duration, percentage);
 
       const asciiVisualizer = getVisualizerSpectrum(7);
       ui.setVisualizer(asciiVisualizer);
@@ -189,7 +171,7 @@ bar_delimiter = 0
 
       ui.setVolumeState(volume, isLoop, isShuffle, eqMode);
     } catch (e) {
-      // Evita de forma absoluta caídas por excepciones imprevistas en los métodos de renderizado
+      // Protector de bucle de renderizado
     }
   }
 
