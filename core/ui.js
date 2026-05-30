@@ -118,7 +118,7 @@ function textToBigAscii(text) {
 export function createUI() {
   const screen = blessed.screen({
     smartCSR: true,
-    title: "MASCII Player 2026",
+    title: "MASCII Player",
     dockBorders: true
   });
 
@@ -170,7 +170,7 @@ export function createUI() {
     height: "30%",
     label: " [ AUDIO CONFIG & CONTROLS ] ",
     border: { type: "line" },
-    style: { border: { fg: "white" } },
+    style: { border: { fg: "green" } },
     padding: { top: 1, left: 2, right: 2 },
     tags: true
   });
