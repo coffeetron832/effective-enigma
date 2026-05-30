@@ -77,15 +77,15 @@ export function createCommands({ ui, player }) {
   }
 
   function runCommand(commandName, args = []) {
-    if (isLocked) return;
-    isLocked = true;
-
+    // Los comandos de reproducción e hilos IPC nativos no deben bloquearse por la UI
     switch (commandName) {
       case "play":
       case "pause":
       case "toggle":
       case "space":
-        if (typeof player.toggle === "function") player.toggle();
+        if (typeof player.toggle === "function") {
+          player.toggle();
+        }
         break;
 
       case "next":
@@ -104,11 +104,14 @@ export function createCommands({ ui, player }) {
         break;
 
       case "load":
+        if (isLocked) return;
+        isLocked = true;
         importPath(args.join(" "));
+        isLocked = false;
         break;
 
       case "clear":
-        ui.clearVisual();
+        if (typeof ui.clearVisual === "function") ui.clearVisual();
         break;
 
       case "quit":
@@ -121,17 +124,14 @@ export function createCommands({ ui, player }) {
         return;
 
       default:
-        // No genera salidas ruidosas en pulsaciones accidentales de teclado
         break;
     }
 
-    setTimeout(() => {
-      updatePlaylistUI();
-      isLocked = false;
-      if (ui.screen && typeof ui.screen.render === "function") {
-        ui.screen.render();
-      }
-    }, 60);
+    // Forzamos la actualización síncrona visual del tracklist en caliente
+    updatePlaylistUI();
+    if (ui.screen && typeof ui.screen.render === "function") {
+      ui.screen.render();
+    }
   }
 
   // Limpieza defensiva del bus de eventos de la pantalla global de Blessed
@@ -156,6 +156,5 @@ export function createCommands({ ui, player }) {
     }
   });
 
-  // Pintado inicial del Tracklist al arrancar
   updatePlaylistUI();
 }

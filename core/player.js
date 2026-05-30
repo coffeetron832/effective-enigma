@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
+import net from "net";
 import * as mm from "music-metadata";
 import sharp from "sharp";
 
@@ -8,8 +9,15 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let playlist = [...initialPlaylist];
   let index = 0;
   let audioProcess = null;
+  let ipcClient = null; 
+  
   let playing = false;
+  let isPaused = false;
+  
   let startedAt = 0;
+  let totalElapsedTime = 0; 
+  let lastResumeAt = 0;
+
   let isManualKill = false; 
   let currentTrackId = 0; 
 
@@ -17,6 +25,9 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let loopState = false;
   let shuffleState = false;
   let eqMode = "ROCK";
+
+  // Ruta única para el socket IPC nativo basado en archivos temporales
+  const IPC_PATH = `/tmp/mascii-mpv-${Date.now()}.sock`;
 
   loadTracks();
 
@@ -52,6 +63,10 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   }
 
   function cleanup() {
+    if (ipcClient) {
+      try { ipcClient.destroy(); } catch {}
+      ipcClient = null;
+    }
     if (audioProcess) {
       try {
         audioProcess.removeAllListeners("exit");
@@ -59,8 +74,26 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       } catch {}
       audioProcess = null;
     }
+    // Borramos el archivo del socket anterior para no dejar basura en /tmp
+    try {
+      if (fs.existsSync(IPC_PATH)) {
+        fs.unlinkSync(IPC_PATH);
+      }
+    } catch {}
+
     playing = false;
+    isPaused = false;
     startedAt = 0;
+    totalElapsedTime = 0;
+    lastResumeAt = 0;
+  }
+
+  // Envía comandos nativos en formato JSON a través del socket Unix IPC
+  function sendIpcCommand(commandArray) {
+    if (ipcClient && !ipcClient.destroyed) {
+      const request = JSON.stringify({ command: commandArray }) + "\n";
+      ipcClient.write(request);
+    }
   }
 
   async function updateAlbumArtMetadata(track, ui, myTrackId) {
@@ -150,8 +183,12 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
     try {
       playing = true;
+      isPaused = false;
       startedAt = Date.now();
+      lastResumeAt = Date.now();
+      totalElapsedTime = 0;
 
+      // Levantamos el subproceso mpv enlazándolo al archivo socket IPC
       audioProcess = spawn(
         "mpv",
         [
@@ -159,6 +196,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
           "--no-terminal",
           "--really-quiet",
           "--keep-open=no",
+          `--input-ipc-server=${IPC_PATH}`, 
           `--volume=${currentVolume}`,
           "--ao=pulse,alsa",
           track.path
@@ -168,6 +206,13 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
           stdio: "ignore"
         }
       );
+
+      // Conexión asíncrona segura al socket una vez mpv lo crea físicamente
+      setTimeout(() => {
+        if (!playing || myTrackId !== currentTrackId) return;
+        ipcClient = net.connect({ path: IPC_PATH });
+        ipcClient.on("error", () => {});
+      }, 200);
 
       audioProcess.on("exit", (code) => {
         if (playing && !isManualKill && code === 0) {
@@ -192,16 +237,31 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     }
   }
 
+  function toggle() {
+    if (!playing) {
+      play();
+      return;
+    }
+
+    if (!isPaused) {
+      totalElapsedTime += Date.now() - lastResumeAt;
+      isPaused = true;
+      sendIpcCommand(["set_property", "pause", true]); 
+      ui.appendLog("{yellow-fg}Playback Paused{/yellow-fg}");
+    } else {
+      lastResumeAt = Date.now();
+      isPaused = false;
+      sendIpcCommand(["set_property", "pause", false]);
+      ui.clearLog();
+    }
+  }
+
   function stop() {
     isManualKill = true; 
     cleanup();
     ui.clearVisual(); 
     ui.setPlaylist(playlist, index); 
     if (ui.render) ui.render();
-  }
-
-  function toggle() {
-    if (playing) { stop(); } else { play(); }
   }
 
   function next() {
@@ -222,7 +282,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     play();
   }
 
-  function isPlaying() { return playing; }
+  function isPlaying() { return playing && !isPaused; }
   function getCurrentIndex() { return index; }
   function getTracks() { return playlist; }
   function getVolume() { return currentVolume; }
@@ -231,8 +291,11 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   function getEQ() { return eqMode; }
   
   function getCurrentTime() {
-    if (!playing || !startedAt) return 0;
-    return Math.floor((Date.now() - startedAt) / 1000);
+    if (!playing) return 0;
+    if (isPaused) return Math.floor(totalElapsedTime / 1000);
+    
+    const currentSegment = Date.now() - lastResumeAt;
+    return Math.floor((totalElapsedTime + currentSegment) / 1000);
   }
   
   function getDuration() {
