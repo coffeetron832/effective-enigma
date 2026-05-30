@@ -73,7 +73,6 @@ export function createCommands({ ui, player }) {
       ui.setPlaylist(tracks, currentIndex);
     }
     
-    // Sincroniza la caja de Audio Config de forma reactiva con el estado del reproductor
     if (typeof ui.setVolumeState === "function") {
       ui.setVolumeState(
         player.getVolume(),
@@ -136,9 +135,17 @@ export function createCommands({ ui, player }) {
         break;
 
       case "quit":
+        // CRÍTICO: Primero matamos de raíz el subproceso mpv y liberamos sockets Unix
+        if (typeof player.stop === "function") {
+          player.stop();
+        }
+        
+        // Destruimos la interfaz de Blessed de forma segura
         if (ui.screen && typeof ui.screen.destroy === "function") {
           ui.screen.destroy();
         }
+        
+        // Salimos de Node.js limpiamente
         process.exit(0);
         return;
 
@@ -159,7 +166,6 @@ export function createCommands({ ui, player }) {
   ui.getInput((ch, key) => {
     const name = key ? key.name : "";
 
-    // Mapeo exhaustivo de atajos directos
     if (name === "space") {
       runCommand("toggle");
     } else if (name === "n") {
@@ -174,7 +180,7 @@ export function createCommands({ ui, player }) {
       runCommand("voldown");
     } else if (ch === "l") {
       runCommand("loop");
-    } else if (ch === "z") { // Usamos 'z' para shuffle para no colisionar con 's' (stop)
+    } else if (ch === "z") {
       runCommand("shuffle");
     } else if (ch === "e") {
       runCommand("eq");
