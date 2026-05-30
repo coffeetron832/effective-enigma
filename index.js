@@ -4,40 +4,68 @@ import { createUI } from "./core/ui.js";
 import { createPlayer } from "./core/player.js";
 import { createCommands } from "./core/commands.js";
 import { loadPlaylist } from "./core/playlist.js";
-
-console.log("MASCII VERSION 2026");
+import blessed from "blessed";
 
 async function main() {
   const ui = createUI();
-  let uiInterval = null;
+  
+  // LOGO ASCII con colores ANSI
+  // Azul Chicle: \x1b[38;2;77;155;255m
+  const COLORS = {
+    gumBlue: "\x1b[38;2;77;155;255m",
+    orange:  "\x1b[38;2;255;165;0m",
+    green:   "\x1b[38;2;0;255;127m",
+    dim:     "\x1b[2m",
+    reset:   "\x1b[0m"
+  };
 
+  const logo = [
+    `${COLORS.gumBlue} ███▄ ▄███▓ ▄▄▄        ██████  ▄████▄   ██▓ ██▓${COLORS.reset}`,
+    `${COLORS.orange}▓██▒▀█▀ ██▒▒████▄    ▒██    ▒ ▒██▀ ▀█  ▓██▒▓██▒${COLORS.reset}`,
+    `${COLORS.orange}▓██    ▓██░▒██  ▀█▄  ░ ▓██▄   ▒▓█    ▄ ▒██▒▒██▒${COLORS.reset}`,
+    `${COLORS.gumBlue}▒██    ▒██ ░██▄▄▄▄██   ▒   ██▒▒▓▓▄ ▄██▒░██░░██░${COLORS.reset}`,
+    `${COLORS.orange}▒██▒   ░██▒ ▓█   ▓██▒▒██████▒▒▒ ▓███▀ ░░██░░██░${COLORS.reset}`,
+    `${COLORS.green}░ ▒░   ░  ░ ▒▒   ▓▒█░▒ ▒▓▒ ▒ ░░ ░▒ ▒  ░░▓  ░▓  ${COLORS.reset}`,
+    `${COLORS.green}░  ░      ░  ▒   ▒▒ ░░ ░▒  ░ ░  ░  ▒    ▒ ░ ▒ ░${COLORS.reset}`,
+    `${COLORS.green}░      ░     ░   ▒   ░  ░  ░  ░         ▒ ░ ▒ ░${COLORS.reset}`,
+    `${COLORS.green}       ░         ░  ░      ░  ░ ░       ░   ░  ${COLORS.reset}${COLORS.dim} v1.0.0${COLORS.reset}`,
+    `${COLORS.green}                              ░                ${COLORS.reset}`
+  ].join("\n");
+
+  // Crear caja de bienvenida centrada
+  const welcomeBox = blessed.box({
+    parent: ui.screen,
+    top: "center",
+    left: "center",
+    width: 60,
+    height: 12,
+    // Eliminamos el {center} de la etiqueta de tags porque el logo ya tiene su estructura
+    content: `{center}${logo}\n\n{white-fg}Initializing...{/}`,
+    tags: true,
+    border: { type: "line" },
+    style: { border: { fg: "cyan" } }
+  });
+
+  ui.render();
+
+  // Esperar 3 segundos y eliminar logo
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  welcomeBox.destroy();
+  ui.render();
+
+  let uiInterval = null;
   let playlist = [];
   try {
     playlist = await loadPlaylist("./music");
   } catch (error) {
-    ui.appendLog(
-      `{red-fg}Could not load ./music folder{/red-fg}\n\n${String(
-        error?.message || error
-      )}`
-    );
+    ui.appendLog(`{red-fg}Could not load ./music folder{/red-fg}`);
   }
 
-  // 1. Inicializamos el reproductor pasándole únicamente la interfaz
-  const player = createPlayer({
-    playlist,
-    ui
-  });
+  const player = createPlayer({ playlist, ui });
+  createCommands({ ui, player });
 
-  // 2. Registramos los comandos del teclado removiendo la dependencia del visualizador
-  createCommands({
-    ui,
-    player
-  });
-
-  // 3. Encendemos un bucle asíncrono gráfico ligero (30 FPS) para refrescar el tiempo de reproducción
   uiInterval = setInterval(() => {
     if (typeof ui.render === "function") {
-      // Forzamos al reproductor a actualizar internamente sus estados de texto y barras de progreso
       if (player && typeof player.getCurrentTime === "function") {
         const track = player.getTrack();
         const current = player.getCurrentTime();
@@ -46,74 +74,26 @@ async function main() {
         const percentage = duration > 0 ? Math.min(100, Math.round((current / duration) * 100)) : 0;
         
         ui.setNowPlaying(trackName, current, duration, percentage);
-        
-        const volume = typeof player.getVolume === "function" ? player.getVolume() : 80;
-        const isLoop = typeof player.isLoop === "function" ? player.isLoop() : false;
-        const isShuffle = typeof player.isShuffle === "function" ? player.isShuffle() : false;
-        const eqMode = typeof player.getEQ === "function" ? player.getEQ() : "ROCK";
-
-        ui.setVolumeState(volume, isLoop, isShuffle, eqMode);
+        ui.setVolumeState(player.getVolume(), player.isLoop(), player.isShuffle(), player.getEQ());
       }
       ui.render();
     }
   }, 33);
 
   let cleanedUp = false;
-
   function cleanup(exitCode = null) {
     if (cleanedUp) return;
     cleanedUp = true;
-
-    if (uiInterval) {
-      clearInterval(uiInterval);
-      uiInterval = null;
-    }
-
-    try {
-      player?.stop?.();
-    } catch {}
-
-    try {
-      ui?.destroy?.();
-    } catch {}
-
-    if (typeof exitCode === "number") {
-      process.exit(exitCode);
-    }
+    if (uiInterval) clearInterval(uiInterval);
+    try { player?.stop?.(); } catch {}
+    try { ui?.destroy?.(); } catch {}
+    if (typeof exitCode === "number") process.exit(exitCode);
   }
 
   process.once("SIGINT", () => cleanup(0));
   process.once("SIGTERM", () => cleanup(0));
-
-  process.once("uncaughtException", (error) => {
-    try {
-      cleanup();
-    } finally {
-      console.error("\nFatal Error:\n");
-      console.error(error);
-      process.exit(1);
-    }
-  });
-
-  process.once("unhandledRejection", (error) => {
-    try {
-      cleanup();
-    } finally {
-      console.error("\nUnhandled Promise Rejection:\n");
-      console.error(error);
-      process.exit(1);
-    }
-  });
-
-  ui.screen.key(["q", "C-c", "escape"], () => {
-    cleanup(0);
-  });
-
+  ui.screen.key(["q", "C-c", "escape"], () => cleanup(0));
   ui.render();
 }
 
-main().catch((error) => {
-  console.error("\nFatal startup error:\n");
-  console.error(error);
-  process.exit(1);
-});
+main().catch(console.error);
