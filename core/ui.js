@@ -1,5 +1,120 @@
 import blessed from "blessed";
 
+// Matriz tipográfica de Alta Resolución (Altura: 5 celdas) para máxima legibilidad
+const ASCII_DIGITS = {
+  '0': [
+    "▄███▄",
+    "█▀  █",
+    "█   █",
+    "█▄  █",
+    "▀███▀"
+  ],
+  '1': [
+    " ▄█  ",
+    "  █  ",
+    "  █  ",
+    "  █  ",
+    "█████"
+  ],
+  '2': [
+    "████▄",
+    "    █",
+    "▄███▀",
+    "█    ",
+    "█████"
+  ],
+  '3': [
+    "████▄",
+    "    █",
+    " ███▄",
+    "    █",
+    "████▀"
+  ],
+  '4': [
+    "█  █ ",
+    "█  █ ",
+    "█████",
+    "   █ ",
+    "   █ "
+  ],
+  '5': [
+    "█████",
+    "█    ",
+    "████▄",
+    "    █",
+    "████▀"
+  ],
+  '6': [
+    "▄███▄",
+    "█    ",
+    "████▄",
+    "█   █",
+    "▀███▀"
+  ],
+  '7': [
+    "█████",
+    "    █",
+    "   █ ",
+    "  █  ",
+    " █   "
+  ],
+  '8': [
+    "▄███▄",
+    "█   █",
+    " ▀██▀",
+    "█   █",
+    "▀███▀"
+  ],
+  '9': [
+    "▄███▄",
+    "█   █",
+    "▀████",
+    "    █",
+    "▀███▀"
+  ],
+  ':': [
+    " ▄ ",
+    " ▀ ",
+    "   ",
+    " ▄ ",
+    " ▀ "
+  ],
+  '/': [
+    "    █",
+    "   █ ",
+    "  █  ",
+    " █   ",
+    "█    "
+  ],
+  ' ': [
+    "     ",
+    "     ",
+    "     ",
+    "     ",
+    "     "
+  ],
+  '-': [
+    "     ",
+    "     ",
+    "█████",
+    "     ",
+    "     "
+  ]
+};
+
+function textToBigAscii(text) {
+  const lines = ["", "", "", "", ""];
+  for (const char of text) {
+    const glyph = ASCII_DIGITS[char] || ASCII_DIGITS[' '];
+    lines[0] += glyph[0] + "  ";
+    lines[1] += glyph[1] + "  ";
+    lines[2] += glyph[2] + "  ";
+    lines[3] += glyph[3] + "  ";
+    lines[4] += glyph[4] + "  ";
+  }
+  return lines.join("\n");
+}
+
 export function createUI() {
   const screen = blessed.screen({
     smartCSR: true,
@@ -18,7 +133,7 @@ export function createUI() {
     style: { border: { fg: "cyan" } },
     align: "center",
     valign: "middle",
-    tags: true // CORRECCIÓN CLAVE: Permite procesar estilos de texto en las carátulas
+    tags: true
   });
 
   const nowPlayingBox = blessed.box({
@@ -30,10 +145,9 @@ export function createUI() {
     label: " [ NOW PLAYING ] ",
     border: { type: "line" },
     style: { border: { fg: "green" } },
-    padding: { top: 1, left: 2, right: 2 },
-    scrollable: true,
-    alwaysScroll: true,
-    tags: true // CORRECCIÓN CLAVE: Permite procesar los textos con {bold} de reproducción
+    padding: { top: 1, left: 3, right: 3 },
+    scrollable: false,
+    tags: true
   });
 
   const playlistBox = blessed.box({
@@ -45,7 +159,7 @@ export function createUI() {
     label: " [ TRACKLIST ] ",
     border: { type: "line" },
     style: { border: { fg: "yellow" } },
-    tags: true // CORRECCIÓN CLAVE: Permite pintar de colores el track interactivo
+    tags: true
   });
 
   const statusBox = blessed.box({
@@ -54,11 +168,11 @@ export function createUI() {
     left: "60%",
     width: "40%",
     height: "30%",
-    label: " [ AUDIO CONFIG ] ",
+    label: " [ AUDIO CONFIG & CONTROLS ] ",
     border: { type: "line" },
     style: { border: { fg: "white" } },
-    padding: { top: 1, left: 2 },
-    tags: true // CORRECCIÓN CLAVE: Permite estructurar la configuración de ecualizadores y volumen
+    padding: { top: 1, left: 2, right: 2 },
+    tags: true
   });
 
   function formatSeconds(sec = 0) {
@@ -69,6 +183,9 @@ export function createUI() {
   }
 
   let globalKeypressListener = null;
+  
+  let lastTimeStr = "";
+  let cachedBigTime = "";
 
   return {
     screen: screen,
@@ -84,7 +201,7 @@ export function createUI() {
           ? nowPlayingBox.width 
           : Math.floor(screen.width * 0.7);
 
-        const barWidth = Math.max(10, computedWidth - 25);
+        const barWidth = Math.max(15, computedWidth - 20);
         
         let safePercent = parseInt(percent);
         if (isNaN(safePercent) || safePercent < 0) safePercent = 0;
@@ -98,18 +215,26 @@ export function createUI() {
         
         const currentTimeStr = formatSeconds(current);
         const totalTimeStr = formatSeconds(total);
+        const timeDisplayString = `${currentTimeStr} / ${totalTimeStr}`;
 
-        const maxTextLength = Math.max(20, computedWidth - 12);
+        if (timeDisplayString !== lastTimeStr) {
+          lastTimeStr = timeDisplayString;
+          cachedBigTime = textToBigAscii(timeDisplayString);
+        }
+
+        const maxTextLength = Math.max(20, computedWidth - 15);
         let displayTrackName = trackName;
         if (displayTrackName.length > maxTextLength) {
           displayTrackName = displayTrackName.slice(0, maxTextLength - 3) + "...";
         }
 
         nowPlayingBox.setContent(
-          `\n` +
-          ` {bold}Track:{/}     ${displayTrackName}\n\n` +
-          ` {bold}Progress:{/}  [${progressBar}] ${safePercent}%\n\n` +
-          ` {bold}Time:{/}      ${currentTimeStr} / ${totalTimeStr}`
+          `{green-fg}{bold}🎵 CURRENT TRACK{/}\n` +
+          `  ${displayTrackName}\n\n` +
+          `{green-fg}{bold}📊 PROGRESS ({/}${safePercent}%{green-fg}{bold}){/}\n` +
+          `  [${progressBar}]\n\n` +
+          `{green-fg}{bold}⏱️ TIME ELAPSED (MIN:SEC){/}\n` +
+          `{cyan-fg}${cachedBigTime}{/}\n`
         );
       } catch (e) {
         nowPlayingBox.setContent(`{bold}Track:{/} ${trackName}\nTime: ${current} / ${total}`);
@@ -125,17 +250,21 @@ export function createUI() {
     },
 
     setVolumeState: (volume, loop, shuffle, eqMode) => {
+      // Rediseño de la caja usando layout de dos columnas para mapear los atajos del usuario
       statusBox.setContent(
-        `• {bold}Volume:{/}    [${volume}%]\n` +
-        `• {bold}Loop:{/}      [${loop ? "ENABLED" : "DISABLED"}]\n` +
-        `• {bold}Shuffle:{/}   [${shuffle ? "ON" : "OFF"}]\n` +
-        `• {bold}Equalizer:{/} {green-fg}${eqMode}{/}`
+        `{bold}STATE{/}                         {bold}KEYBOARD SHORTCUTS{/}\n` +
+        `• Volume:    [${volume}%]          ▲/▼ o +/- : Vol Up/Down\n` +
+        `• Loop:      [${loop ? "ENABLED " : "DISABLED"}]          L         : Toggle Loop\n` +
+        `• Shuffle:   [${shuffle ? "ON " : "OFF"}]           Z         : Toggle Shuffle\n` +
+        `• Equalizer: {green-fg}[${eqMode.padStart(7)}] {/}     E         : Cycle EQ Presets\n` +
+        `                           SPACE     : Play / Pause\n` +
+        `                           N / P     : Next / Prev Track\n` +
+        `                           S / Q     : Stop / Quit Player`
       );
     },
 
     setPlaylist: (playlist, currentIndex) => {
       const items = playlist.map((track, idx) => {
-        // Marcamos la canción que está sonando con un color amarillo brillante de Blessed
         return idx === currentIndex 
           ? `{yellow-fg}-> * ${track.name}{/}` 
           : `     ${track.name}`;
@@ -149,7 +278,6 @@ export function createUI() {
     },
 
     appendLog: (msg) => {
-      // Limpia etiquetas anidadas para evitar bugs de strings rotos en los bordes
       const clearMsg = msg.replace(/\{.*?\}/g, "");
       nowPlayingBox.setLabel(` [ LOG: ${clearMsg} ] `);
     },

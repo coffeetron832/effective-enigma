@@ -7,6 +7,7 @@ import sharp from "sharp";
 
 export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let playlist = [...initialPlaylist];
+  let originalPlaylist = []; // Copia de respaldo para cuando se desactive Shuffle
   let index = 0;
   let audioProcess = null;
   let ipcClient = null; 
@@ -25,6 +26,9 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let loopState = false;
   let shuffleState = false;
   let eqMode = "ROCK";
+
+  const EQ_PRESETS = ["ROCK", "POP", "JAZZ", "FLAT", "CLASSIC"];
+  let eqIndex = 0;
 
   const IPC_PATH = `/tmp/mascii-mpv-${Date.now()}.sock`;
 
@@ -52,6 +56,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
       if (localTracks.length > 0) {
         playlist = localTracks;
+        originalPlaylist = [...localTracks]; // Respaldamos el orden original
       }
     } catch {}
   }
@@ -93,6 +98,55 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     }
   }
 
+  // --- NUEVOS MÉTODOS DE CONFIGURACIÓN DE AUDIO NATIVOS ---
+
+  function setVolume(val) {
+    currentVolume = val;
+    sendIpcCommand(["set_property", "volume", currentVolume]);
+  }
+
+  function toggleLoop() {
+    loopState = !loopState;
+    // Sincroniza la directiva con la instancia en ejecución de mpv si existiera
+    sendIpcCommand(["set_property", "loop-file", loopState ? "inf" : "no"]);
+  }
+
+  function toggleShuffle() {
+    shuffleState = !shuffleState;
+    if (!playlist.length) return;
+
+    const currentTrack = playlist[index];
+
+    if (shuffleState) {
+      // Algoritmo Fisher-Yates para mezclar aleatoriamente preservando el track actual
+      for (let i = playlist.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [playlist[i], playlist[j]] = [playlist[j], playlist[i]];
+      }
+      index = playlist.indexOf(currentTrack);
+    } else {
+      // Restauramos la lista original y localizamos la posición actual
+      playlist = [...originalPlaylist];
+      index = playlist.findIndex(t => t.path === currentTrack.path);
+      if (index === -1) index = 0;
+    }
+  }
+
+  function cycleEQ() {
+    eqIndex = (eqIndex + 1) % EQ_PRESETS.length;
+    eqMode = EQ_PRESETS[eqIndex];
+    
+    // Configuración nativa paramétrica de filtros FFmpeg para inyectar a mpv
+    let eqFilter = "giga-flat";
+    if (eqMode === "ROCK")    eqFilter = "equalizer=f=100:g=4,equalizer=f=1000:g=-2,equalizer=f=10000:g=5";
+    if (eqMode === "POP")     eqFilter = "equalizer=f=100:g=-2,equalizer=f=1000:g=3,equalizer=f=10000:g=-1";
+    if (eqMode === "JAZZ")    eqFilter = "equalizer=f=100:g=3,equalizer=f=1000:g=0,equalizer=f=10000:g=3";
+    if (eqMode === "CLASSIC") eqFilter = "equalizer=f=100:g=2,equalizer=f=1000:g=-1,equalizer=f=10000:g=-3";
+    if (eqMode === "FLAT")    eqFilter = "equalizer=f=100:g=0,equalizer=f=1000:g=0,equalizer=f=10000:g=0";
+    
+    sendIpcCommand(["set_property", "af", eqFilter]);
+  }
+
   async function updateAlbumArtMetadata(track, ui, myTrackId) {
     const defaultArt = [
       "      .:::::.",
@@ -127,8 +181,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       if (picture && picture.data) {
         const uiSize = ui.getSize ? ui.getSize() : { width: 80, height: 24 };
         
-        // Multiplicamos el muestreo por pixel. Como cada celda contiene 2x4 subpuntos de Braille, 
-        // duplicamos la densidad horizontal y cuadruplicamos la vertical para un detalle brutal.
         const cols = Math.max(Math.floor(uiSize.width * 0.24), 22);
         const rows = Math.max(Math.floor(uiSize.height - 18), 11);
         
@@ -147,7 +199,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
         const width = info.width;
         const height = info.height;
 
-        // Mapeo binario de puntos Braille Unicode (Matriz 2x4 por celda)
         const dotValues = [
           [0x01, 0x08],
           [0x02, 0x10],
@@ -160,7 +211,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
             let brailleCode = 0;
             let rSum = 0, gSum = 0, bSum = 0, count = 0;
 
-            // Analizamos el bloque interno de 2x4 subpíxeles
             for (let dy = 0; dy < 4; dy++) {
               for (let dx = 0; dx < 2; dx++) {
                 const py = y + dy;
@@ -172,11 +222,9 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
                   const g = data[idx + 1];
                   const b = data[idx + 2];
 
-                  // Promedio de color del subbloque
                   rSum += r; gSum += g; bSum += b;
                   count++;
 
-                  // Si supera el umbral medio de brillo, activamos el punto de relieve Braille
                   const brightness = 0.2126 * r + 0.7152 * g + 0.0722 * b;
                   if (brightness > 45) { 
                     brailleCode |= dotValues[dy][dx];
@@ -189,10 +237,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
             const gAvg = count > 0 ? Math.round(gSum / count) : 0;
             const bAvg = count > 0 ? Math.round(bSum / count) : 0;
 
-            // Generamos el carácter Unicode final sumando el offset base de Braille (0x2800)
             const finalChar = String.fromCharCode(0x2800 + brailleCode);
-
-            // Inyectamos el carácter de alta densidad con su color TrueColor respectivo
             asciiResult += `\x1b[38;2;${rAvg};${gAvg};${bAvg}m${finalChar}\x1b[0m`;
           }
           asciiResult += "\n";
@@ -228,33 +273,43 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       lastResumeAt = Date.now();
       totalElapsedTime = 0;
 
-      audioProcess = spawn(
-        "mpv",
-        [
-          "--no-video",
-          "--no-terminal",
-          "--really-quiet",
-          "--keep-open=no",
-          `--input-ipc-server=${IPC_PATH}`, 
-          `--volume=${currentVolume}`,
-          "--ao=pulse,alsa",
-          track.path
-        ],
-        {
-          detached: false,
-          stdio: "ignore"
-        }
-      );
+      // Inyección dinámica de directivas condicionales según el estado de la UI
+      const mpvArgs = [
+        "--no-video",
+        "--no-terminal",
+        "--really-quiet",
+        "--keep-open=no",
+        `--input-ipc-server=${IPC_PATH}`, 
+        `--volume=${currentVolume}`,
+        `--loop-file=${loopState ? "inf" : "no"}`,
+        "--ao=pulse,alsa",
+        track.path
+      ];
+
+      audioProcess = spawn("mpv", mpvArgs, {
+        detached: false,
+        stdio: "ignore"
+      });
 
       setTimeout(() => {
         if (!playing || myTrackId !== currentTrackId) return;
         ipcClient = net.connect({ path: IPC_PATH });
         ipcClient.on("error", () => {});
+        // Aplicamos el ecualizador en frío tras conectar el socket IPC
+        if (eqMode !== "FLAT") {
+          cycleEQ();
+          eqIndex = (eqIndex - 1 + EQ_PRESETS.length) % EQ_PRESETS.length; // Corrige desfase de ciclo
+        }
       }, 200);
 
       audioProcess.on("exit", (code) => {
+        // Si finaliza la canción de forma natural y loop está apagado, salta a la siguiente
         if (playing && !isManualKill && code === 0) {
-          next();
+          if (loopState) {
+            play(); // Re-reproduce el mismo archivo si falla el flag de mpv
+          } else {
+            next();
+          }
         } else {
           if (ui.render) ui.render();
         }
@@ -344,6 +399,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   return {
     play, stop, toggle, next, prev, isPlaying, getTrack,
     getCurrentIndex, getTracks, getCurrentTime, getDuration,
-    loadTracks, getVolume, isLoop, isShuffle, getEQ
+    loadTracks, getVolume, isLoop, isShuffle, getEQ,
+    setVolume, toggleLoop, toggleShuffle, cycleEQ // EXPUESTOS PARA COMMANDS.JS
   };
 }

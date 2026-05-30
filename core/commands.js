@@ -4,7 +4,6 @@ import path from "path";
 export function createCommands({ ui, player }) {
   let isLocked = false;
 
-  // Redirige las salidas de texto a la interfaz visual
   function log(message = "") {
     ui.appendLog(message);
   }
@@ -67,40 +66,66 @@ export function createCommands({ ui, player }) {
     }
   }
 
-  // Refresca la lista de canciones en el contenedor correspondiente
   function updatePlaylistUI() {
     if (typeof player.getTracks === "function" && typeof player.getCurrentIndex === "function") {
       const tracks = player.getTracks();
       const currentIndex = player.getCurrentIndex();
       ui.setPlaylist(tracks, currentIndex);
     }
+    
+    // Sincroniza la caja de Audio Config de forma reactiva con el estado del reproductor
+    if (typeof ui.setVolumeState === "function") {
+      ui.setVolumeState(
+        player.getVolume(),
+        player.isLoop(),
+        player.isShuffle(),
+        player.getEQ()
+      );
+    }
   }
 
   function runCommand(commandName, args = []) {
-    // Los comandos de reproducción e hilos IPC nativos no deben bloquearse por la UI
     switch (commandName) {
-      case "play":
-      case "pause":
       case "toggle":
-      case "space":
-        if (typeof player.toggle === "function") {
-          player.toggle();
-        }
+        if (typeof player.toggle === "function") player.toggle();
         break;
 
       case "next":
-      case "n":
         if (typeof player.next === "function") player.next();
         break;
 
       case "prev":
-      case "p":
         if (typeof player.prev === "function") player.prev();
         break;
 
       case "stop":
-      case "s":
         if (typeof player.stop === "function") player.stop();
+        break;
+
+      case "volup":
+        if (typeof player.setVolume === "function") {
+          const currentVol = player.getVolume();
+          player.setVolume(Math.min(100, currentVol + 5));
+        }
+        break;
+
+      case "voldown":
+        if (typeof player.setVolume === "function") {
+          const currentVol = player.getVolume();
+          player.setVolume(Math.max(0, currentVol - 5));
+        }
+        break;
+
+      case "loop":
+        if (typeof player.toggleLoop === "function") player.toggleLoop();
+        break;
+
+      case "shuffle":
+        if (typeof player.toggleShuffle === "function") player.toggleShuffle();
+        break;
+
+      case "eq":
+        if (typeof player.cycleEQ === "function") player.cycleEQ();
         break;
 
       case "load":
@@ -110,13 +135,7 @@ export function createCommands({ ui, player }) {
         isLocked = false;
         break;
 
-      case "clear":
-        if (typeof ui.clearVisual === "function") ui.clearVisual();
-        break;
-
       case "quit":
-      case "exit":
-      case "q":
         if (ui.screen && typeof ui.screen.destroy === "function") {
           ui.screen.destroy();
         }
@@ -127,22 +146,20 @@ export function createCommands({ ui, player }) {
         break;
     }
 
-    // Forzamos la actualización síncrona visual del tracklist en caliente
     updatePlaylistUI();
     if (ui.screen && typeof ui.screen.render === "function") {
       ui.screen.render();
     }
   }
 
-  // Limpieza defensiva del bus de eventos de la pantalla global de Blessed
   if (ui.screen) {
     ui.screen.removeAllListeners("keypress");
   }
 
-  // Interceptor reactivo de teclas directas (Atajos TUI estándar)
   ui.getInput((ch, key) => {
     const name = key ? key.name : "";
 
+    // Mapeo exhaustivo de atajos directos
     if (name === "space") {
       runCommand("toggle");
     } else if (name === "n") {
@@ -151,6 +168,16 @@ export function createCommands({ ui, player }) {
       runCommand("prev");
     } else if (name === "s") {
       runCommand("stop");
+    } else if (ch === "+" || name === "up") {
+      runCommand("volup");
+    } else if (ch === "-" || name === "down") {
+      runCommand("voldown");
+    } else if (ch === "l") {
+      runCommand("loop");
+    } else if (ch === "z") { // Usamos 'z' para shuffle para no colisionar con 's' (stop)
+      runCommand("shuffle");
+    } else if (ch === "e") {
+      runCommand("eq");
     } else if (name === "q" || (key && key.ctrl && name === "c")) {
       runCommand("quit");
     }
