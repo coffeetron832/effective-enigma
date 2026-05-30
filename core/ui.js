@@ -17,7 +17,8 @@ export function createUI() {
     border: { type: "line" },
     style: { border: { fg: "cyan" } },
     align: "center",
-    valign: "middle"
+    valign: "middle",
+    tags: true // CORRECCIÓN CLAVE: Permite procesar estilos de texto en las carátulas
   });
 
   const nowPlayingBox = blessed.box({
@@ -25,13 +26,14 @@ export function createUI() {
     top: 0,
     left: "30%",
     width: "70%",
-    height: "70%", // Expandido para ocupar de forma limpia el hueco superior
+    height: "70%", 
     label: " [ NOW PLAYING ] ",
     border: { type: "line" },
     style: { border: { fg: "green" } },
     padding: { top: 1, left: 2, right: 2 },
     scrollable: true,
-    alwaysScroll: true
+    alwaysScroll: true,
+    tags: true // CORRECCIÓN CLAVE: Permite procesar los textos con {bold} de reproducción
   });
 
   const playlistBox = blessed.box({
@@ -42,7 +44,8 @@ export function createUI() {
     height: "30%",
     label: " [ TRACKLIST ] ",
     border: { type: "line" },
-    style: { border: { fg: "yellow" } }
+    style: { border: { fg: "yellow" } },
+    tags: true // CORRECCIÓN CLAVE: Permite pintar de colores el track interactivo
   });
 
   const statusBox = blessed.box({
@@ -54,7 +57,8 @@ export function createUI() {
     label: " [ AUDIO CONFIG ] ",
     border: { type: "line" },
     style: { border: { fg: "white" } },
-    padding: { top: 1, left: 2 }
+    padding: { top: 1, left: 2 },
+    tags: true // CORRECCIÓN CLAVE: Permite estructurar la configuración de ecualizadores y volumen
   });
 
   function formatSeconds(sec = 0) {
@@ -101,19 +105,17 @@ export function createUI() {
           displayTrackName = displayTrackName.slice(0, maxTextLength - 3) + "...";
         }
 
-        // Renderizado vertical holgado aprovechando el nuevo espacio
         nowPlayingBox.setContent(
           `\n` +
-          ` {bold}Track:{/bold}     ${displayTrackName}\n\n` +
-          ` {bold}Progress:{/bold}  [${progressBar}] ${safePercent}%\n\n` +
-          ` {bold}Time:{/bold}      ${currentTimeStr} / ${totalTimeStr}`
+          ` {bold}Track:{/}     ${displayTrackName}\n\n` +
+          ` {bold}Progress:{/}  [${progressBar}] ${safePercent}%\n\n` +
+          ` {bold}Time:{/}      ${currentTimeStr} / ${totalTimeStr}`
         );
       } catch (e) {
-        nowPlayingBox.setContent(`{bold}Track:{/bold} ${trackName}\nTime: ${current} / ${total}`);
+        nowPlayingBox.setContent(`{bold}Track:{/} ${trackName}\nTime: ${current} / ${total}`);
       }
     },
 
-    // Funciones stub pasivas para evitar que rompa index.js al llamarlas
     setVisualizer: () => {},
     clearVisual: () => {},
     setWaveform: () => {},
@@ -124,16 +126,19 @@ export function createUI() {
 
     setVolumeState: (volume, loop, shuffle, eqMode) => {
       statusBox.setContent(
-        `• {bold}Volume:{/bold}    [${volume}%]\n` +
-        `• {bold}Loop:{/bold}      [${loop ? "ENABLED" : "DISABLED"}]\n` +
-        `• {bold}Shuffle:{/bold}  [${shuffle ? "ON" : "OFF"}]\n` +
-        `• {bold}Equalizer:{/bold} {green-fg}${eqMode}{/}`
+        `• {bold}Volume:{/}    [${volume}%]\n` +
+        `• {bold}Loop:{/}      [${loop ? "ENABLED" : "DISABLED"}]\n` +
+        `• {bold}Shuffle:{/}   [${shuffle ? "ON" : "OFF"}]\n` +
+        `• {bold}Equalizer:{/} {green-fg}${eqMode}{/}`
       );
     },
 
     setPlaylist: (playlist, currentIndex) => {
       const items = playlist.map((track, idx) => {
-        return idx === currentIndex ? `-> * ${track.name}` : `     ${track.name}`;
+        // Marcamos la canción que está sonando con un color amarillo brillante de Blessed
+        return idx === currentIndex 
+          ? `{yellow-fg}-> * ${track.name}{/}` 
+          : `     ${track.name}`;
       }).slice(Math.max(0, currentIndex - 2), currentIndex + 3);
 
       playlistBox.setContent(items.join("\n"));
@@ -144,7 +149,9 @@ export function createUI() {
     },
 
     appendLog: (msg) => {
-      nowPlayingBox.setLabel(` [ LOG: ${msg.replace(/\{.*?\}/g, "")} ] `);
+      // Limpia etiquetas anidadas para evitar bugs de strings rotos en los bordes
+      const clearMsg = msg.replace(/\{.*?\}/g, "");
+      nowPlayingBox.setLabel(` [ LOG: ${clearMsg} ] `);
     },
 
     clearLog: () => {

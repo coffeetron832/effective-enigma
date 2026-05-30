@@ -26,7 +26,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
   let shuffleState = false;
   let eqMode = "ROCK";
 
-  // Ruta única para el socket IPC nativo basado en archivos temporales
   const IPC_PATH = `/tmp/mascii-mpv-${Date.now()}.sock`;
 
   loadTracks();
@@ -74,7 +73,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       } catch {}
       audioProcess = null;
     }
-    // Borramos el archivo del socket anterior para no dejar basura en /tmp
     try {
       if (fs.existsSync(IPC_PATH)) {
         fs.unlinkSync(IPC_PATH);
@@ -88,7 +86,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     lastResumeAt = 0;
   }
 
-  // Envía comandos nativos en formato JSON a través del socket Unix IPC
   function sendIpcCommand(commandArray) {
     if (ipcClient && !ipcClient.destroyed) {
       const request = JSON.stringify({ command: commandArray }) + "\n";
@@ -129,12 +126,18 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
 
       if (picture && picture.data) {
         const uiSize = ui.getSize ? ui.getSize() : { width: 80, height: 24 };
-        const targetWidth = Math.max(Math.floor(uiSize.width * 0.28), 24);
-        const targetHeight = Math.max(Math.floor(uiSize.height - 18), 10) * 2;
+        
+        // Multiplicamos el muestreo por pixel. Como cada celda contiene 2x4 subpuntos de Braille, 
+        // duplicamos la densidad horizontal y cuadruplicamos la vertical para un detalle brutal.
+        const cols = Math.max(Math.floor(uiSize.width * 0.24), 22);
+        const rows = Math.max(Math.floor(uiSize.height - 18), 11);
+        
+        const targetWidth = cols * 2;
+        const targetHeight = rows * 4;
 
         const { data, info } = await sharp(picture.data)
           .resize(targetWidth, targetHeight, { fit: "fill" })
-          .ensureAlpha()
+          .removeAlpha() 
           .raw()
           .toBuffer({ resolveWithObject: true });
 
@@ -144,16 +147,53 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
         const width = info.width;
         const height = info.height;
 
-        for (let y = 0; y < height; y += 2) {
-          for (let x = 0; x < width; x++) {
-            const idxTop = (y * width + x) * 4;
-            const rTop = data[idxTop]; const gTop = data[idxTop + 1]; const bTop = data[idxTop + 2];
+        // Mapeo binario de puntos Braille Unicode (Matriz 2x4 por celda)
+        const dotValues = [
+          [0x01, 0x08],
+          [0x02, 0x10],
+          [0x04, 0x20],
+          [0x40, 0x80]
+        ];
 
-            const hasBottom = (y + 1) < height;
-            const idxBot = hasBottom ? ((y + 1) * width + x) * 4 : idxTop;
-            const rBot = data[idxBot]; const gBot = data[idxBot + 1]; const bBot = data[idxBot + 2];
+        for (let y = 0; y < height; y += 4) {
+          for (let x = 0; x < width; x += 2) {
+            let brailleCode = 0;
+            let rSum = 0, gSum = 0, bSum = 0, count = 0;
 
-            asciiResult += `\x1b[38;2;${rBot};${gBot};${bBot};48;2;${rTop};${gTop};${bTop}m▄\x1b[0m`;
+            // Analizamos el bloque interno de 2x4 subpíxeles
+            for (let dy = 0; dy < 4; dy++) {
+              for (let dx = 0; dx < 2; dx++) {
+                const py = y + dy;
+                const px = x + dx;
+
+                if (py < height && px < width) {
+                  const idx = (py * width + px) * 3;
+                  const r = data[idx];
+                  const g = data[idx + 1];
+                  const b = data[idx + 2];
+
+                  // Promedio de color del subbloque
+                  rSum += r; gSum += g; bSum += b;
+                  count++;
+
+                  // Si supera el umbral medio de brillo, activamos el punto de relieve Braille
+                  const brightness = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                  if (brightness > 45) { 
+                    brailleCode |= dotValues[dy][dx];
+                  }
+                }
+              }
+            }
+
+            const rAvg = count > 0 ? Math.round(rSum / count) : 0;
+            const gAvg = count > 0 ? Math.round(gSum / count) : 0;
+            const bAvg = count > 0 ? Math.round(bSum / count) : 0;
+
+            // Generamos el carácter Unicode final sumando el offset base de Braille (0x2800)
+            const finalChar = String.fromCharCode(0x2800 + brailleCode);
+
+            // Inyectamos el carácter de alta densidad con su color TrueColor respectivo
+            asciiResult += `\x1b[38;2;${rAvg};${gAvg};${bAvg}m${finalChar}\x1b[0m`;
           }
           asciiResult += "\n";
         }
@@ -188,7 +228,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       lastResumeAt = Date.now();
       totalElapsedTime = 0;
 
-      // Levantamos el subproceso mpv enlazándolo al archivo socket IPC
       audioProcess = spawn(
         "mpv",
         [
@@ -207,7 +246,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
         }
       );
 
-      // Conexión asíncrona segura al socket una vez mpv lo crea físicamente
       setTimeout(() => {
         if (!playing || myTrackId !== currentTrackId) return;
         ipcClient = net.connect({ path: IPC_PATH });
