@@ -474,8 +474,14 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     });
   }
 
+  async function normalizeImageBuffer(imageBuffer) {
+    if (!imageBuffer) return null;
+    return Buffer.isBuffer(imageBuffer) ? imageBuffer : Buffer.from(imageBuffer);
+  }
+
   async function imageBufferToAscii(imageBuffer, key) {
-    if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) return null;
+    const normalized = await normalizeImageBuffer(imageBuffer);
+    if (!normalized) return null;
     if (artCache.has(key)) return artCache.get(key);
 
     const uiSize = safeCall(ui?.getSize) || { width: 80, height: 24 };
@@ -485,7 +491,7 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
     const targetWidth = cols * 2;
     const targetHeight = rows * 4;
 
-    const { data, info } = await sharp(imageBuffer)
+    const { data, info } = await sharp(normalized)
       .resize(targetWidth, targetHeight, { fit: "fill" })
       .removeAlpha()
       .raw()
@@ -523,7 +529,6 @@ export function createPlayer({ playlist: initialPlaylist = [], ui }) {
       if (myTrackId !== currentTrackId) return;
 
       const title = track.name || "YouTube Stream";
-      const artist = track.artist || "YouTube";
       const year = "2026";
 
       safeCall(ui?.setFileInfo, isYoutube ? "YouTube" : "WEB Stream", "Stream");
