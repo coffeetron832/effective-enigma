@@ -32,18 +32,3 @@ Is your music player cluttering your desktop with heavy interfaces and unnecessa
 * **Ultra-Lightweight:** Built to run on minimal resources, leaving your CPU free to handle your real work.
 
 ---
-
-
-## Quick Setup
-
-Ready to upgrade your terminal experience? Getting MASCII up and running is fast:
-
-1. **Ensure [Node.js](https://nodejs.org/) is installed.**
-2. **Install the power players:** We leverage `mpv` for audio stability and `yt-dlp` for high-quality streaming.
-
-### System Requirements
-
-**On Ubuntu/Debian:**
-```bash
-sudo apt update
-sudo apt install mpv yt-dlp
